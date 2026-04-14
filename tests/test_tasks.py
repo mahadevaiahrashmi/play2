@@ -2,7 +2,7 @@
 from warehouse_routing.grader import grade_variation
 from warehouse_routing.models import Action
 from warehouse_routing.sim import GridEnv
-from warehouse_routing.tasks import EASY, make_variation
+from warehouse_routing.tasks import EASY, MEDIUM, make_variation
 
 
 def test_easy_spec_shape() -> None:
@@ -56,3 +56,24 @@ def test_end_to_end_manhattan_tour_in_spec_order() -> None:
     assert all(final.visited)
     score = grade_variation(final, v.optimal_length)
     assert 0.0 < score <= 1.0
+
+
+def test_medium_spec_shape() -> None:
+    assert MEDIUM.tier == "medium"
+    assert MEDIUM.grid_rows == 16 and MEDIUM.grid_cols == 16
+    assert MEDIUM.n_skus == 6
+    assert 0.0 < MEDIUM.obstacle_density < 1.0
+
+
+def test_medium_variation_all_skus_reachable() -> None:
+    for seed in (1, 2, 3, 17, 99):
+        v = make_variation(MEDIUM, seed=seed)
+        # Optimal length sentinel (10^6) would signal an unreachable SKU.
+        assert v.optimal_length < 10_000
+        assert len(v.observation.sku_locations) == MEDIUM.n_skus
+        assert v.observation.step_budget == MEDIUM.step_budget
+
+
+def test_medium_has_obstacles() -> None:
+    v = make_variation(MEDIUM, seed=42)
+    assert len(v.observation.obstacles) > 0

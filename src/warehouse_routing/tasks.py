@@ -7,6 +7,7 @@ optimal_length) pair produced from a seed. Same seed -> same variation.
 """
 
 import random
+from collections import deque
 from dataclasses import dataclass
 
 from warehouse_routing.models import Cell, Observation, Tier
@@ -32,6 +33,62 @@ EASY = TaskSpec(
     step_budget=64,
 )
 
+MEDIUM = TaskSpec(
+    tier="medium",
+    grid_rows=16,
+    grid_cols=16,
+    n_skus=6,
+    obstacle_density=0.10,
+    step_budget=200,
+)
+
+
+def _reachable_from(
+    grid_rows: int,
+    grid_cols: int,
+    blocked: set[tuple[int, int]],
+    start: tuple[int, int],
+) -> set[tuple[int, int]]:
+    """BFS from start; returns every reachable cell."""
+    seen: set[tuple[int, int]] = {start}
+    queue: deque[tuple[int, int]] = deque([start])
+    while queue:
+        r, c = queue.popleft()
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if (
+                0 <= nr < grid_rows
+                and 0 <= nc < grid_cols
+                and (nr, nc) not in blocked
+                and (nr, nc) not in seen
+            ):
+                seen.add((nr, nc))
+                queue.append((nr, nc))
+    return seen
+
+
+def _prune_until_reachable(
+    grid_rows: int,
+    grid_cols: int,
+    obstacle_coords: list[tuple[int, int]],
+    warehouse: tuple[int, int],
+    sku_coords: list[tuple[int, int]],
+    rng: random.Random,
+) -> list[tuple[int, int]]:
+    """Remove obstacles one at a time until all SKUs are reachable from warehouse."""
+    blocked = set(obstacle_coords)
+    targets = set(sku_coords)
+    current = list(obstacle_coords)
+    while True:
+        reachable = _reachable_from(grid_rows, grid_cols, blocked, warehouse)
+        if targets.issubset(reachable):
+            return sorted(blocked)
+        if not current:
+            return []
+        rng.shuffle(current)
+        victim = current.pop()
+        blocked.discard(victim)
+
 
 @dataclass(frozen=True)
 class Variation:
@@ -56,6 +113,16 @@ def make_variation(spec: TaskSpec, seed: int, attempt: int = 1) -> Variation:
 
     n_obstacles = int(spec.obstacle_density * (spec.grid_rows * spec.grid_cols))
     obstacle_coords = remaining[:n_obstacles]
+
+    if obstacle_coords:
+        obstacle_coords = _prune_until_reachable(
+            spec.grid_rows,
+            spec.grid_cols,
+            obstacle_coords,
+            (warehouse.row, warehouse.col),
+            sku_coords,
+            rng,
+        )
 
     sku_cells = [Cell(row=r, col=c) for r, c in sku_coords]
     obstacle_cells = [Cell(row=r, col=c) for r, c in obstacle_coords]
