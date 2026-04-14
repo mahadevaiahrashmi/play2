@@ -1,0 +1,49 @@
+# agent-notes: { ctx: "python build + deps + tool config", deps: [], state: active, last: "sato@2026-04-14" }
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "warehouse-routing-openenv"
+version = "0.0.1"
+description = "OpenEnv-compliant gridworld env: LLM agent plans warehouse AMR pick-and-pack routes."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "mahadevaiahrashmi" }]
+dependencies = [
+    "pydantic>=2.6",
+    "python-tsp>=0.4",
+    "numpy>=1.26",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "openai>=1.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/warehouse_routing"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["warehouse_routing"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

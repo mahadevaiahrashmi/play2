@@ -43,6 +43,10 @@ coverage/
 htmlcov/
 .coverage
 *.lcov
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 
 # OS files
 Desktop.ini
