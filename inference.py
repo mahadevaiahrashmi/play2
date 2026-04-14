@@ -1,0 +1,223 @@
+#!/usr/bin/env python
+# agent-notes: { ctx: "baseline inference entrypoint; OpenAI client + [START]/[STEP]/[END] logs", deps: [src/warehouse_routing/tasks.py, src/warehouse_routing/sim.py, src/warehouse_routing/reward.py, src/warehouse_routing/grader.py], state: active, last: "sato@2026-04-14" }
+"""
+Inference Script
+================
+
+MANDATORY
+- Before submitting, the following env vars must be set:
+    API_BASE_URL   The LLM endpoint.
+    MODEL_NAME     The model identifier.
+    HF_TOKEN       Hugging Face / API key.
+
+- This file must be named ``inference.py`` and sit in the repo root.
+- All LLM calls must go through the OpenAI client.
+
+STDOUT FORMAT (per hackathon spec, field names and ordering are load-bearing)
+
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+
+Rules:
+    - One [START] per variation.
+    - One [STEP] per env.step() call.
+    - One [END] per variation, always emitted (even on exception).
+    - reward and rewards formatted to 2 decimals; score to 3 decimals.
+    - done / success lowercase booleans.
+    - error = raw error string or "null".
+
+OFFLINE SMOKE
+    python inference.py --dry-run
+    (uses a random policy, makes no network calls)
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import random
+import re
+import sys
+import traceback
+from dataclasses import dataclass
+from typing import Protocol
+
+from warehouse_routing.grader import grade_variation
+from warehouse_routing.models import Action, Move, Observation
+from warehouse_routing.reward import compute_reward
+from warehouse_routing.sim import GridEnv, StepResult
+from warehouse_routing.tasks import EASY, TaskSpec, make_variation
+
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+
+BENCHMARK = "warehouse_routing"
+VALID_MOVES: tuple[Move, ...] = ("N", "S", "E", "W")
+SPRINT_1_SPECS: list[TaskSpec] = [EASY]
+SEEDS: tuple[int, ...] = (13, 29, 101)
+
+SYSTEM_PROMPT = (
+    "You control a warehouse autonomous mobile robot (AMR) on a grid. Your goal: "
+    "visit every SKU cell, then return to the packing station (warehouse), using "
+    "the fewest moves. Obstacles block movement; leaving the grid is invalid.\n"
+    "Each turn you receive the current state as JSON. Respond with EXACTLY ONE of "
+    "N, S, E, W (single uppercase letter). No explanation."
+)
+
+
+# ---------------------------------------------------------------------------
+# Logging helpers — field order and formatting must match spec exactly.
+# ---------------------------------------------------------------------------
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
+
+class Policy(Protocol):
+    def choose(self, obs: Observation) -> Move: ...
+
+
+@dataclass
+class RandomPolicy:
+    rng: random.Random
+
+    def choose(self, obs: Observation) -> Move:
+        return self.rng.choice(VALID_MOVES)
+
+
+@dataclass
+class OpenAIPolicy:
+    client: object  # openai.OpenAI, left untyped to avoid hard import at module scope
+    model: str
+
+    def choose(self, obs: Observation) -> Move:
+        try:
+            completion = self.client.chat.completions.create(  # type: ignore[attr-defined]
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": obs.model_dump_json()},
+                ],
+                max_tokens=4,
+                temperature=0.0,
+            )
+            text = (completion.choices[0].message.content or "").strip().upper()
+        except Exception as exc:  # pragma: no cover - network path
+            print(f"[DEBUG] LLM call failed: {exc}", flush=True)
+            return "N"
+        m = re.search(r"[NSEW]", text)
+        return m.group(0) if m else "N"  # type: ignore[return-value]
+
+
+def build_policy(dry_run: bool) -> Policy:
+    if dry_run:
+        return RandomPolicy(rng=random.Random(0))
+    try:
+        from openai import OpenAI
+    except ImportError as exc:  # pragma: no cover
+        print(f"[ERROR] openai package missing: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not API_KEY:
+        print("[ERROR] HF_TOKEN (or API_KEY) must be set, or pass --dry-run", file=sys.stderr)
+        sys.exit(2)
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    return OpenAIPolicy(client=client, model=MODEL_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Run a single variation
+# ---------------------------------------------------------------------------
+
+
+def _step_error(result: StepResult) -> str | None:
+    return "invalid_move" if result.invalid else None
+
+
+def run_variation(spec: TaskSpec, seed: int, policy: Policy, model_label: str) -> float:
+    variation = make_variation(spec, seed=seed)
+    env = GridEnv(variation.observation)
+    task_name = f"{spec.tier}-seed{seed}"
+
+    rewards: list[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
+
+    log_start(task=task_name, env=BENCHMARK, model=model_label)
+    try:
+        while not env.observation.done:
+            obs = env.observation
+            move = policy.choose(obs)
+            result = env.step(Action(move=move))
+            reward = compute_reward(result, variation.optimal_length)
+            rewards.append(reward.value)
+            steps_taken = result.observation.steps_taken
+            log_step(
+                step=steps_taken,
+                action=move,
+                reward=reward.value,
+                done=result.done,
+                error=_step_error(result),
+            )
+        final = env.observation
+        success = all(final.visited) and final.robot_pos == final.warehouse
+        score = grade_variation(final, variation.optimal_length)
+    except Exception as exc:
+        traceback.print_exc()
+        log_end(success=False, steps=steps_taken, score=0.0, rewards=rewards)
+        raise exc
+    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+    return score
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="random policy, no network")
+    parser.add_argument(
+        "--max-variations",
+        type=int,
+        default=len(SEEDS),
+        help=f"cap variations per task (default {len(SEEDS)})",
+    )
+    args = parser.parse_args()
+
+    policy = build_policy(args.dry_run)
+    model_label = "random-dryrun" if args.dry_run else MODEL_NAME
+
+    scores: list[float] = []
+    for spec in SPRINT_1_SPECS:
+        for seed in SEEDS[: args.max_variations]:
+            scores.append(run_variation(spec, seed, policy, model_label))
+
+    mean = sum(scores) / len(scores) if scores else 0.0
+    print(f"[SUMMARY] mean_score={mean:.3f} n={len(scores)}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
