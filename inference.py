@@ -43,11 +43,12 @@ import traceback
 from dataclasses import dataclass
 from typing import Protocol
 
+from warehouse_routing.curriculum import DEFAULT_TIME_LIMIT_SECONDS, Curriculum
 from warehouse_routing.grader import grade_variation
 from warehouse_routing.models import Action, Move, Observation
 from warehouse_routing.reward import compute_reward
 from warehouse_routing.sim import GridEnv, StepResult
-from warehouse_routing.tasks import EASY, TaskSpec, make_variation
+from warehouse_routing.tasks import TaskSpec, make_variation
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
@@ -55,8 +56,6 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 BENCHMARK = "warehouse_routing"
 VALID_MOVES: tuple[Move, ...] = ("N", "S", "E", "W")
-SPRINT_1_SPECS: list[TaskSpec] = [EASY]
-SEEDS: tuple[int, ...] = (13, 29, 101)
 
 SYSTEM_PROMPT = (
     "You control a warehouse autonomous mobile robot (AMR) on a grid. Your goal: "
@@ -158,10 +157,10 @@ def _step_error(result: StepResult) -> str | None:
     return "invalid_move" if result.invalid else None
 
 
-def run_variation(spec: TaskSpec, seed: int, policy: Policy, model_label: str) -> float:
-    variation = make_variation(spec, seed=seed)
+def run_variation(spec: TaskSpec, seed: int, attempt: int, policy: Policy, model_label: str) -> float:
+    variation = make_variation(spec, seed=seed, attempt=attempt)
     env = GridEnv(variation.observation)
-    task_name = f"{spec.tier}-seed{seed}"
+    task_name = f"{spec.tier}-seed{seed}-attempt{attempt}"
 
     rewards: list[float] = []
     steps_taken = 0
@@ -201,21 +200,37 @@ def main() -> int:
     parser.add_argument(
         "--max-variations",
         type=int,
-        default=len(SEEDS),
-        help=f"cap variations per task (default {len(SEEDS)})",
+        default=0,
+        help="hard cap on total variations (default: curriculum termination)",
     )
+    parser.add_argument("--master-seed", type=int, default=0)
     args = parser.parse_args()
 
     policy = build_policy(args.dry_run)
     model_label = "random-dryrun" if args.dry_run else MODEL_NAME
 
+    # Dry-run skips the wall-clock cap so the smoke test is deterministic;
+    # real runs honor the default 19-minute budget from the curriculum.
+    curriculum = Curriculum(
+        master_seed=args.master_seed,
+        time_limit_seconds=None if args.dry_run else DEFAULT_TIME_LIMIT_SECONDS,
+    )
+
     scores: list[float] = []
-    for spec in SPRINT_1_SPECS:
-        for seed in SEEDS[: args.max_variations]:
-            scores.append(run_variation(spec, seed, policy, model_label))
+    while not curriculum.is_done():
+        if args.max_variations and len(scores) >= args.max_variations:
+            break
+        spec, seed, attempt = curriculum.next_variation()
+        score = run_variation(spec, seed, attempt, policy, model_label)
+        scores.append(score)
+        curriculum.record_score(score)
 
     mean = sum(scores) / len(scores) if scores else 0.0
-    print(f"[SUMMARY] mean_score={mean:.3f} n={len(scores)}", flush=True)
+    summary = curriculum.summary()
+    print(
+        f"[SUMMARY] mean_score={mean:.3f} n={len(scores)} mastered={summary['mastered']}",
+        flush=True,
+    )
     return 0
 
 
