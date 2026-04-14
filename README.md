@@ -1,228 +1,199 @@
-# vteam-hybrid
+# agent-notes: { ctx: "public README: motivation, spec, setup, baseline", deps: [inference.py, openenv.yaml, docs/baseline-scores.md], state: active, last: "sato@2026-04-14" }
 
-**A virtual development team for Claude Code.** One template. A team of specialists that enforces TDD, challenges architecture decisions, and gets smarter the more you use it.
+# warehouse-routing-openenv
 
-> Claude Code is powerful, but on a real project it drifts. You ask it to implement a feature and it skips tests. You ask for architecture advice and it writes code instead. Reviews are inconsistent. Context evaporates between sessions.
->
-> vteam-hybrid fixes this with 19 specialized agents — each with a defined role, clear boundaries, and rules about when they activate. You talk in natural language. The template handles the discipline.
+An [OpenEnv](https://github.com/meta-pytorch/OpenEnv)-compliant gridworld
+environment that trains and evaluates LLM agents on **multi-stop warehouse
+routing**. An autonomous mobile robot (AMR) must visit every SKU location in a
+warehouse and return to the packing station using the fewest moves possible.
+Agents are graded against the optimal TSP solution for each variation.
 
----
+Built to the [Meta PyTorch OpenEnv Hackathon](https://www.scaler.com/school-of-technology/meta-pytorch-hackathon/)
+Round 1 spec as a learning / portfolio project.
 
-## Quick Start
+## Motivation
 
-### 1. Create from template
+Last-mile pick-and-pack is a well-studied operations research problem — TSP
+with obstacles, a step budget, and a return-to-origin constraint. It is
+small enough to admit optimal solutions (so grading is objective), large
+enough to be non-trivial for an LLM prompted cold, and directly connected to
+real AMR fleet planning. Three tiers (Easy / Medium / Hard) stress increasing
+grid size, SKU count, obstacle density, and step budget.
 
-Click **"Use this template"** on GitHub, or:
+## Task & grading
+
+Each variation is a 2D grid containing:
+
+- A **warehouse** cell (the packing station, always `(0, 0)`).
+- A set of **SKU locations** (pick targets).
+- A set of **obstacles** (blocked cells).
+- A hard **step budget**.
+
+The agent wins when every SKU has been visited **and** the robot is back at
+the warehouse within the step budget. Score:
+
+```
+score = optimal_length / agent_length   (clamped to [0, 1])
+score = 0                                (if not all SKUs visited or not returned)
+```
+
+Optimal length is computed with exact TSP (Held-Karp via `python-tsp`) over an
+obstacle-aware Manhattan distance matrix built with A*.
+
+### Tiers
+
+| Tier   | Grid  | SKUs | Obstacle density | Step budget |
+|--------|-------|------|------------------|-------------|
+| Easy   | 8×8   | 3    | 0.00             | 64          |
+| Medium | 16×16 | 6    | 0.10             | 200         |
+| Hard   | 24×24 | 10   | 0.25             | 500         |
+
+### Adaptive curriculum
+
+`Curriculum` walks the agent Easy → Medium → Hard. A tier is **mastered** after
+**3 consecutive variations scoring ≥ 0.9**, or **force-promoted** after 20
+attempts. A default 19-minute wall-clock cap terminates the run under the
+hackathon's 20-minute budget. Seeds are deterministic in
+`(master_seed, tier_index, attempt)`.
+
+## Action & observation space
+
+### Action
+
+```python
+class Action(openenv.Action):
+    move: Literal["N", "S", "E", "W"]
+```
+
+One grid cell per step, 4-connected. Pick-up and drop-off are automatic on
+entering an SKU cell.
+
+### Observation
+
+```python
+class Observation(openenv.Observation):
+    grid_rows: int
+    grid_cols: int
+    warehouse: Cell
+    sku_locations: list[Cell]
+    obstacles: list[Cell]
+    robot_pos: Cell
+    visited: list[bool]          # parallel to sku_locations
+    steps_taken: int
+    step_budget: int
+    tier: Literal["easy", "medium", "hard"]
+    attempt: int
+    variation_seed: int
+    done: bool                   # inherited
+    reward: float                # inherited, populated per step
+    metadata: dict               # curriculum state, grader score, reward parts
+```
+
+### Reward
+
+Dense shaped reward on every step:
+
+| Event                 | Reward           |
+|-----------------------|------------------|
+| Any step (time cost)  | `-0.01`          |
+| Invalid move          | `-0.05`          |
+| Newly-visited SKU     | `+0.10`          |
+| Terminal success      | `+optimal/agent` |
+| Terminal failure      | `-0.20`          |
+
+## Setup
+
+Requires Python ≥ 3.12 and Docker.
 
 ```bash
-git clone <this-repo> my-project && cd my-project
-rm -rf .git && git init && git add -A
-git commit -m "chore: initialize from vteam-hybrid template"
+git clone <this-repo>
+cd warehouse-routing-openenv
+uv sync                       # or: pip install -e ".[dev]"
+
+# run the tests
+pytest                        # 73 tests
+
+# smoke-test the environment offline (random policy, no LLM)
+python inference.py --dry-run --max-variations 5
+
+# validate the OpenEnv spec
+openenv validate .
+
+# build & run the container
+docker build -t warehouse-routing:dev .
+docker run --rm -p 8000:8000 warehouse-routing:dev
+
+# hit it
+curl -X POST http://localhost:8000/reset -H 'content-type: application/json' -d '{}'
+curl -X POST http://localhost:8000/step  -H 'content-type: application/json' -d '{"action":{"move":"E"}}'
 ```
 
-**Validate:** `ls .claude/agents/` — you should see 19 agent files (18 personas + 1 composite reviewer).
-
-### 2. Open in Claude Code
+## Running the LLM agent
 
 ```bash
-claude
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+export HF_TOKEN="hf_..."
+python inference.py
 ```
 
-### 3. Scaffold your stack (optional)
-
-| Command | What it sets up |
-|---------|----------------|
-| `/scaffold-cli` | Python or Rust CLI tool |
-| `/scaffold-web-monorepo` | TypeScript monorepo (Next.js, React) |
-| `/scaffold-ai-tool` | Python AI/ML tool (FastAPI, Streamlit) |
-| `/scaffold-static-site` | Static site for GitHub Pages |
-
-No scaffold fits? Skip this — the template works with any tech stack.
-
-**Validate:** `ls docs/code-map.md` exists (moved from `docs/scaffolds/`).
-
-### 4. Run discovery
-
-**Fast path (~5 min):**
-```
-/quickstart I want to build <your project description>
-```
-Cam asks 3 questions, creates a backlog, and starts your first TDD cycle immediately. Best for getting started quickly — you can add the full methodology later.
-
-**Full path (~30-60 min):**
-```
-/kickoff I want to build <your project description>
-```
-Five interactive phases: vision elicitation, product philosophy, design exploration, architecture with adversarial debate, and project board setup.
-
-**Validate (quickstart):** CLAUDE.md has your project name, `docs/plans/quickstart-backlog.md` exists, and your first test is written.
-
-**Validate (kickoff):** You should have `docs/product-context.md`, at least one ADR in `docs/adrs/`, and issues on your GitHub Projects board.
-
-### 5. Start building
+`inference.py` logs each variation in the hackathon-mandated format:
 
 ```
-/tdd <feature-name>
+[START] task=<tier-seedN-attemptM> env=warehouse_routing model=<model>
+[STEP]  step=<n> action=<N|S|E|W> reward=<0.00> done=<bool> error=<msg|null>
+[END]   success=<bool> steps=<n> score=<0.000> rewards=<r1,r2,...>
+[SUMMARY] mean_score=<0.000> n=<N> mastered=<dict>
 ```
 
-Tara writes failing tests first. Sato makes them pass. Code review runs automatically with three parallel lenses.
+## Submission validator
 
-**Validate:** A new test file, implementation code, and the issue moved to "In Review."
+Before submitting to HF Spaces, run:
 
----
-
-## How It Works
-
-```
-You:  I want to build a CLI tool that converts markdown to PDF
-
-Cam:  Let me explore that with you. Who's the target user —
-      developers or non-technical users? And what's your priority:
-      fidelity to the markdown spec, or speed of conversion?
-
-You:  Developers, and speed matters more than fidelity.
-
-Cam:  Got it. Let me probe a few more things before we commit to
-      an approach...
+```bash
+./validate-submission.sh https://<your-space>.hf.space
 ```
 
-After discovery, the system hands off to Tara (failing tests) then Sato (implementation). You stay in control — the agents do the structured work.
+Checks:
 
-**The five core agents** (always available):
+1. HF Space responds `200` to `POST /reset`
+2. `docker build .` succeeds (10-min cap)
+3. `openenv validate .` passes
 
-| Agent | Role | When they activate |
-|-------|------|--------------------|
-| **Cam** | Vision and elicitation | When you describe a new idea or vague requirement |
-| **Sato** | Implementation | When code needs to be written |
-| **Tara** | Testing (TDD) | Before Sato — writes failing tests first |
-| **Pat** | Product and priorities | When requirements need defining or priorities need setting |
-| **Grace** | Tracking and coordination | When work needs to be organized or status tracked |
+## Baseline scores
 
-**Additional agents** activate when the work demands it — Archie for architecture, Vik for code review, Pierrot for security, Wei for devil's advocacy, Dani for design. You don't need to learn them upfront.
+See [`docs/baseline-scores.md`](docs/baseline-scores.md).
 
----
+| Run | Policy        | n | mean_score |
+|-----|---------------|---|------------|
+| 1   | random-dryrun | 5 | 0.000      |
 
-## What Makes This Different
+LLM baseline pending API credentials.
 
-- **TDD is enforced**, not suggested. Tara writes failing tests before Sato writes code.
-- **Architecture decisions get challenged.** Archie proposes, Wei attacks. Structured debate, not rubber-stamping.
-- **Security review is automatic.** Pierrot reviews every PR for vulnerabilities.
-- **Context survives between sessions.** Agent-notes in every file mean Claude doesn't start from zero.
-- **Sprint lifecycle is managed.** Grace tracks velocity, Pat manages the backlog, `/sprint-boundary` runs retros.
-
----
-
-## Sprint Lifecycle
-
-<!-- Text summary for accessibility: Plan (Pat + Grace) -> Architecture gate if needed (Archie + Wei debate) -> TDD cycle (Tara writes tests, Sato implements) -> Code review (Vik + Tara + Pierrot, three lenses) -> Done Gate (15-item checklist) -> repeat or sprint boundary -->
-
-```mermaid
-flowchart TD
-    Plan["Sprint Planning — Pat + Grace"]
-    Gate{"Architecture decision needed?"}
-    ADR["Write ADR — Archie"]
-    Debate["Challenge assumptions — Wei"]
-    TDD["TDD Cycle — Tara writes tests, Sato implements"]
-    Review["Code Review — Vik + Tara + Pierrot"]
-    DoneGate["Done Gate — 15-item checklist"]
-    More{"More items in sprint?"}
-    Boundary["Sprint Boundary — /sprint-boundary"]
-
-    Plan --> Gate
-    Gate -->|Yes| ADR --> Debate --> TDD
-    Gate -->|No| TDD
-    TDD --> Review --> DoneGate
-    DoneGate --> More
-    More -->|Yes| Gate
-    More -->|No| Boundary
-
-    style Plan fill:#e1f5fe
-    style TDD fill:#e8f5e9
-    style Review fill:#fce4ec
-    style DoneGate fill:#fff3e0
-    style Boundary fill:#f3e5f5
-```
-
----
-
-## All Commands
-
-| Command | Description |
-|---------|-------------|
-| `/quickstart` | Fast 5-min onboarding: 3 questions, backlog, first TDD cycle |
-| `/kickoff` | Full discovery workflow with board setup (30-60 min) |
-| `/plan` | Create an implementation plan for a feature |
-| `/tdd` | TDD workflow: Tara writes failing tests, Sato implements |
-| `/code-review` | Three-lens code review (simplicity, tests, security) |
-| `/review` | Guided human review/walkthrough session |
-| `/design` | Explore design concepts with Dani |
-| `/adr` | Create a new Architecture Decision Record |
-| `/sprint-boundary` | Sprint retro, backlog sweep, next sprint setup |
-| `/handoff` | Save session state for next session |
-| `/resume` | Pick up from a previous session's handoff |
-| `/retro` | Kaizen retrospective with GitHub issues |
-| `/scaffold-cli` | Scaffold a CLI project (Python/Rust) |
-| `/scaffold-web-monorepo` | Scaffold a web/mobile monorepo (TypeScript) |
-| `/scaffold-ai-tool` | Scaffold an AI/data tool (Python) |
-| `/scaffold-static-site` | Scaffold a static site (GitHub Pages) |
-| `/restack` | Re-evaluate tech stack choices |
-| `/pin-versions` | Pin dependency versions, update SBOM |
-| `/sync-template` | Reapply template evolutions to in-flight repo |
-| `/devcontainer` | Set up a dev container |
-| `/sync-ghcp` | Sync agents to GitHub Copilot format |
-| `/aws-review` | AWS deployment readiness review |
-| `/azure-review` | Azure deployment readiness review |
-| `/gcp-review` | GCP deployment readiness review |
-| `/cloud-update` | Refresh cloud service landscape research |
-| `/doctor` | Run 8 diagnostic checks on project setup |
-| `/whatsit` | Explain a technology or concept (scout mode) |
-
----
-
-## What Gets Created
+## Repository layout
 
 ```
 .
-├── CLAUDE.md                 # Runtime instructions for Claude Code
-├── docs/
-│   ├── methodology/          # System docs (phases, personas, agent-notes)
-│   ├── process/              # Governance, done gate, gotchas
-│   ├── integrations/         # Tracking adapters (GitHub Projects, Jira)
-│   ├── adrs/                 # Architecture Decision Records
-│   └── template-guide.md     # Deep-dive reference and customization guide
-├── .claude/
-│   ├── agents/               # 19 agent definitions (18 personas + 1 composite)
-│   └── commands/             # 27 workflow commands
-└── scripts/                  # Automation scripts
+├── inference.py                 # hackathon entrypoint (OpenAI client)
+├── openenv.yaml                 # OpenEnv spec
+├── Dockerfile                   # multi-stage build on openenv-base
+├── validate-submission.sh       # pre-submission gate
+├── server/app.py                # repo-root FastAPI entrypoint (re-exports)
+├── src/warehouse_routing/
+│   ├── models.py                # typed Observation / Action / Cell
+│   ├── sim.py                   # GridEnv state machine
+│   ├── tasks.py                 # TaskSpec, variation generator
+│   ├── solver.py                # exact TSP + obstacle-aware distances
+│   ├── pathing.py               # A* distance
+│   ├── reward.py                # dense shaped reward
+│   ├── grader.py                # 0..1 score
+│   ├── curriculum.py            # adaptive Easy→Medium→Hard state machine
+│   ├── env.py                   # OpenEnv Environment adapter
+│   └── server/app.py            # real FastAPI app
+├── tests/                       # 73 tests
+└── docs/                        # plans, ADRs, baseline scores
 ```
 
-Directories like `docs/plans/`, `docs/sprints/`, `docs/tracking/`, and `docs/security/` are created automatically by commands when first needed.
+## License
 
----
-
-## Samples
-
-See what the methodology produces before committing to it:
-
-| Sample | Demonstrates | Time |
-|--------|-------------|------|
-| [hello-tdd/](samples/hello-tdd/) | Core TDD workflow (Tara writes tests, Sato makes them pass) | ~5 min |
-| [architecture-debate/](samples/architecture-debate/) | Architecture Gate (Archie proposes, Wei challenges) | ~5 min |
-| [full-sprint/](samples/full-sprint/) | Complete sprint lifecycle (plan, TDD, review, retro) | ~10 min |
-
----
-
-## Going Deeper
-
-| Doc | Time | What you'll learn |
-|-----|------|-------------------|
-| [Template Guide](docs/template-guide.md) | 5 min | Customization, scaling, full command reference |
-| [Phases (TL;DR)](docs/methodology/phases.md#tldr) | 2 min | The 7 phases at a glance |
-| [Phases (full)](docs/methodology/phases.md) | 10 min | How each phase works, who participates |
-| [Personas](docs/methodology/personas.md) | skim | The 19-agent roster, capabilities, tiers |
-
----
-
-## Replace This README
-
-This README is automatically replaced during `/quickstart`, `/kickoff`, or any `/scaffold-*` command. See [Template Guide](docs/template-guide.md) for the full reference.
+MIT
