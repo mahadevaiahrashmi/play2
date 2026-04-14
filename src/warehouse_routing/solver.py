@@ -15,12 +15,30 @@ import numpy as np
 from python_tsp.exact import solve_tsp_dynamic_programming
 
 from warehouse_routing.models import Cell
+from warehouse_routing.pathing import astar_distance
 
 DistanceFn = Callable[[Cell, Cell], int]
 
 
 def manhattan(a: Cell, b: Cell) -> int:
     return abs(a.row - b.row) + abs(a.col - b.col)
+
+
+def obstacle_aware_distance(
+    grid_rows: int, grid_cols: int, obstacles: list[Cell]
+) -> DistanceFn:
+    """DistanceFn factory that uses A* shortest-path on an obstacle grid.
+
+    Unreachable pairs return a large sentinel so the TSP solver avoids them
+    (but still returns a tour if any feasible closed path exists).
+    """
+    blocked = frozenset((c.row, c.col) for c in obstacles)
+
+    def _dist(a: Cell, b: Cell) -> int:
+        d = astar_distance(grid_rows, grid_cols, blocked, a, b)
+        return d if d is not None else 10**6
+
+    return _dist
 
 
 def build_distance_matrix(

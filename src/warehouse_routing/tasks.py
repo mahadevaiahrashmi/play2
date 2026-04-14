@@ -10,7 +10,7 @@ import random
 from dataclasses import dataclass
 
 from warehouse_routing.models import Cell, Observation, Tier
-from warehouse_routing.solver import optimal_tour_length
+from warehouse_routing.solver import obstacle_aware_distance, optimal_tour_length
 
 
 @dataclass(frozen=True)
@@ -75,5 +75,9 @@ def make_variation(spec: TaskSpec, seed: int, attempt: int = 1) -> Variation:
         variation_seed=seed,
         done=False,
     )
-    optimal = optimal_tour_length(warehouse, sku_cells)
+    if obstacle_cells:
+        dist_fn = obstacle_aware_distance(spec.grid_rows, spec.grid_cols, obstacle_cells)
+        optimal = optimal_tour_length(warehouse, sku_cells, distance_fn=dist_fn)
+    else:
+        optimal = optimal_tour_length(warehouse, sku_cells)
     return Variation(observation=obs, optimal_length=optimal)
