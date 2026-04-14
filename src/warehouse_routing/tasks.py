@@ -1,0 +1,79 @@
+# agent-notes: { ctx: "task specs + seeded variation generators", deps: [src/warehouse_routing/models.py, src/warehouse_routing/solver.py], state: active, last: "sato@2026-04-14" }
+"""Task definitions and deterministic variation generators.
+
+A TaskSpec is the tier-level template (grid size, SKU count, obstacle
+density, step budget). A variation is a concrete (Observation,
+optimal_length) pair produced from a seed. Same seed -> same variation.
+"""
+
+import random
+from dataclasses import dataclass
+
+from warehouse_routing.models import Cell, Observation, Tier
+from warehouse_routing.solver import optimal_tour_length
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    tier: Tier
+    grid_rows: int
+    grid_cols: int
+    n_skus: int
+    obstacle_density: float
+    step_budget: int
+
+
+EASY = TaskSpec(
+    tier="easy",
+    grid_rows=8,
+    grid_cols=8,
+    n_skus=3,
+    obstacle_density=0.0,
+    step_budget=64,
+)
+
+
+@dataclass(frozen=True)
+class Variation:
+    observation: Observation
+    optimal_length: int
+
+
+def make_variation(spec: TaskSpec, seed: int, attempt: int = 1) -> Variation:
+    rng = random.Random(seed)
+    warehouse = Cell(row=0, col=0)
+
+    all_cells = [
+        (r, c)
+        for r in range(spec.grid_rows)
+        for c in range(spec.grid_cols)
+        if (r, c) != (warehouse.row, warehouse.col)
+    ]
+    rng.shuffle(all_cells)
+
+    sku_coords = all_cells[: spec.n_skus]
+    remaining = all_cells[spec.n_skus :]
+
+    n_obstacles = int(spec.obstacle_density * (spec.grid_rows * spec.grid_cols))
+    obstacle_coords = remaining[:n_obstacles]
+
+    sku_cells = [Cell(row=r, col=c) for r, c in sku_coords]
+    obstacle_cells = [Cell(row=r, col=c) for r, c in obstacle_coords]
+
+    obs = Observation(
+        grid_rows=spec.grid_rows,
+        grid_cols=spec.grid_cols,
+        warehouse=warehouse,
+        sku_locations=sku_cells,
+        obstacles=obstacle_cells,
+        robot_pos=warehouse,
+        visited=[False] * len(sku_cells),
+        steps_taken=0,
+        step_budget=spec.step_budget,
+        tier=spec.tier,
+        attempt=attempt,
+        variation_seed=seed,
+        done=False,
+    )
+    optimal = optimal_tour_length(warehouse, sku_cells)
+    return Variation(observation=obs, optimal_length=optimal)
