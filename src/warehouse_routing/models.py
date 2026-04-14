@@ -3,6 +3,8 @@
 
 from typing import Literal
 
+from openenv.core.env_server.types import Action as _OpenEnvAction
+from openenv.core.env_server.types import Observation as _OpenEnvObservation
 from pydantic import BaseModel, ConfigDict, Field
 
 Tier = Literal["easy", "medium", "hard"]
@@ -15,7 +17,7 @@ class Cell(BaseModel):
     col: int = Field(ge=0)
 
 
-class Observation(BaseModel):
+class Observation(_OpenEnvObservation):
     grid_rows: int = Field(ge=1)
     grid_cols: int = Field(ge=1)
     warehouse: Cell
@@ -28,10 +30,9 @@ class Observation(BaseModel):
     tier: Tier
     attempt: int = Field(ge=1)
     variation_seed: int
-    done: bool = False
 
 
-class Action(BaseModel):
+class Action(_OpenEnvAction):
     move: Move
 
 

@@ -18,6 +18,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "openai>=1.20",
+    "openenv-core[core]>=0.2.2",
 ]
 
 [project.optional-dependencies]
