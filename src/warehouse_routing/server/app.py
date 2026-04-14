@@ -13,6 +13,7 @@ from openenv.core.env_server.http_server import create_app
 
 from warehouse_routing.env import WarehouseRoutingEnvironment
 from warehouse_routing.models import Action, Observation
+from warehouse_routing.server.ui import mount_ui
 
 app = create_app(
     WarehouseRoutingEnvironment,
@@ -21,6 +22,8 @@ app = create_app(
     env_name="warehouse_routing",
     max_concurrent_envs=1,
 )
+
+mount_ui(app)
 
 
 def main(host: str = "0.0.0.0", port: int = 8000) -> None:
