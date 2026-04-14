@@ -42,6 +42,17 @@ MEDIUM = TaskSpec(
     step_budget=200,
 )
 
+HARD = TaskSpec(
+    tier="hard",
+    grid_rows=24,
+    grid_cols=24,
+    n_skus=10,
+    obstacle_density=0.25,
+    step_budget=500,
+)
+
+ALL_TASKS: tuple[TaskSpec, ...] = (EASY, MEDIUM, HARD)
+
 
 def _reachable_from(
     grid_rows: int,

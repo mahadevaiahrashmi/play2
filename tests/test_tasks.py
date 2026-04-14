@@ -2,7 +2,7 @@
 from warehouse_routing.grader import grade_variation
 from warehouse_routing.models import Action
 from warehouse_routing.sim import GridEnv
-from warehouse_routing.tasks import EASY, MEDIUM, make_variation
+from warehouse_routing.tasks import ALL_TASKS, EASY, HARD, MEDIUM, make_variation
 
 
 def test_easy_spec_shape() -> None:
@@ -77,3 +77,22 @@ def test_medium_variation_all_skus_reachable() -> None:
 def test_medium_has_obstacles() -> None:
     v = make_variation(MEDIUM, seed=42)
     assert len(v.observation.obstacles) > 0
+
+
+def test_hard_spec_shape() -> None:
+    assert HARD.tier == "hard"
+    assert HARD.grid_rows == 24 and HARD.grid_cols == 24
+    assert HARD.n_skus == 10
+    assert HARD.obstacle_density > MEDIUM.obstacle_density
+
+
+def test_hard_variation_all_skus_reachable() -> None:
+    for seed in (1, 5, 17, 99, 1000):
+        v = make_variation(HARD, seed=seed)
+        assert v.optimal_length < 10_000
+        assert len(v.observation.sku_locations) == HARD.n_skus
+        assert v.observation.step_budget == HARD.step_budget
+
+
+def test_all_tasks_tuple_ordered() -> None:
+    assert ALL_TASKS == (EASY, MEDIUM, HARD)
