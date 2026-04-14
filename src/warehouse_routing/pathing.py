@@ -67,3 +67,57 @@ def astar_distance(
                 heapq.heappush(open_heap, (ng + _manhattan(nb, t), ng, nb))
 
     return None
+
+
+def astar_path(
+    grid_rows: int,
+    grid_cols: int,
+    obstacles: Iterable[Cell] | frozenset[Coord],
+    start: Cell,
+    end: Cell,
+) -> list[Cell] | None:
+    """Return the shortest path as a list of Cells (inclusive), or None."""
+    if isinstance(obstacles, frozenset):
+        blocked: frozenset[Coord] = obstacles
+    else:
+        blocked = frozenset((c.row, c.col) for c in obstacles)
+
+    s: Coord = (start.row, start.col)
+    t: Coord = (end.row, end.col)
+    if s == t:
+        return [start]
+    if s in blocked or t in blocked:
+        return None
+
+    open_heap: list[tuple[int, int, Coord]] = [(_manhattan(s, t), 0, s)]
+    g_score: dict[Coord, int] = {s: 0}
+    parent: dict[Coord, Coord] = {}
+
+    while open_heap:
+        _f, g, cur = heapq.heappop(open_heap)
+        if cur == t:
+            path: list[Cell] = []
+            node: Coord = cur
+            while True:
+                path.append(Cell(row=node[0], col=node[1]))
+                if node == s:
+                    break
+                node = parent[node]
+            path.reverse()
+            return path
+        if g > g_score.get(cur, 10**9):
+            continue
+        for dr, dc in _OFFSETS:
+            nr, nc = cur[0] + dr, cur[1] + dc
+            if nr < 0 or nr >= grid_rows or nc < 0 or nc >= grid_cols:
+                continue
+            nb: Coord = (nr, nc)
+            if nb in blocked:
+                continue
+            ng = g + 1
+            if ng < g_score.get(nb, 10**9):
+                g_score[nb] = ng
+                parent[nb] = cur
+                heapq.heappush(open_heap, (ng + _manhattan(nb, t), ng, nb))
+
+    return None

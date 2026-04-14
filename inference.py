@@ -41,11 +41,12 @@ import re
 import sys
 import traceback
 from dataclasses import dataclass
-from typing import Protocol
 
 from warehouse_routing.curriculum import DEFAULT_TIME_LIMIT_SECONDS, Curriculum
+from warehouse_routing.eval import Policy
 from warehouse_routing.grader import grade_variation
 from warehouse_routing.models import Action, Move, Observation
+from warehouse_routing.policies import VALID_MOVES, RandomPolicy
 from warehouse_routing.reward import compute_reward
 from warehouse_routing.sim import GridEnv, StepResult
 from warehouse_routing.tasks import TaskSpec, make_variation
@@ -55,7 +56,6 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 BENCHMARK = "warehouse_routing"
-VALID_MOVES: tuple[Move, ...] = ("N", "S", "E", "W")
 
 SYSTEM_PROMPT = (
     "You control a warehouse autonomous mobile robot (AMR) on a grid. Your goal: "
@@ -95,18 +95,6 @@ def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> No
 # ---------------------------------------------------------------------------
 # Policies
 # ---------------------------------------------------------------------------
-
-
-class Policy(Protocol):
-    def choose(self, obs: Observation) -> Move: ...
-
-
-@dataclass
-class RandomPolicy:
-    rng: random.Random
-
-    def choose(self, obs: Observation) -> Move:
-        return self.rng.choice(VALID_MOVES)
 
 
 @dataclass

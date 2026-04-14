@@ -64,3 +64,24 @@ def optimal_tour_length(
     matrix = build_distance_matrix(nodes, distance_fn)
     _permutation, distance = solve_tsp_dynamic_programming(matrix)
     return int(distance)
+
+
+def optimal_tour_order(
+    warehouse: Cell,
+    sku_locations: list[Cell],
+    distance_fn: DistanceFn = manhattan,
+) -> list[Cell]:
+    """Return the full closed tour as a cell sequence: warehouse -> ... -> warehouse.
+
+    The intermediate cells are SKU locations in optimal visit order. The
+    returned list always starts and ends at `warehouse`. Returns
+    `[warehouse, warehouse]` when there are no SKUs.
+    """
+    if not sku_locations:
+        return [warehouse, warehouse]
+    nodes: list[Cell] = [warehouse, *sku_locations]
+    matrix = build_distance_matrix(nodes, distance_fn)
+    permutation, _distance = solve_tsp_dynamic_programming(matrix)
+    # python-tsp returns a permutation starting at node 0 (warehouse).
+    ordered = [nodes[i] for i in permutation]
+    return [*ordered, warehouse]
