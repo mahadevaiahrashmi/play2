@@ -29,6 +29,9 @@ dev = [
     "mypy>=1.10",
 ]
 
+[project.scripts]
+server = "warehouse_routing.server.app:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/warehouse_routing"]
 
