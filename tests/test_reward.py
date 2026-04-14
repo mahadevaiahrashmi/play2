@@ -3,6 +3,7 @@ import pytest
 
 from warehouse_routing.models import Cell, Observation
 from warehouse_routing.reward import (
+    BUDGET_EXHAUST_PENALTY,
     INVALID_PENALTY,
     SKU_VISIT_BONUS,
     TIME_PENALTY,
@@ -71,8 +72,8 @@ def test_terminal_success_is_optimal_over_agent() -> None:
     assert r.terminal == 1.0
 
 
-def test_terminal_failure_no_bonus() -> None:
-    # Done but not all visited -> terminal 0
+def test_terminal_failure_penalty() -> None:
+    # Done but not all visited -> explicit budget-exhaustion penalty
     r = compute_reward(
         StepResult(
             _obs(visited=[False], steps_taken=64, done=True),
@@ -83,7 +84,7 @@ def test_terminal_failure_no_bonus() -> None:
         ),
         optimal_length=4,
     )
-    assert r.terminal == 0.0
+    assert r.terminal == BUDGET_EXHAUST_PENALTY
 
 
 def test_reward_is_bounded_scalar() -> None:

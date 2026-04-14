@@ -9,6 +9,8 @@ Seed derivation is deterministic in (master_seed, tier_index,
 attempt_in_tier), so runs are reproducible.
 """
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from warehouse_routing.models import Tier
@@ -17,6 +19,7 @@ from warehouse_routing.tasks import ALL_TASKS, TaskSpec
 MASTERY_SCORE: float = 0.9
 MASTERY_STREAK: int = 3
 MAX_ATTEMPTS: int = 20
+DEFAULT_TIME_LIMIT_SECONDS: float = 19 * 60  # 19 minutes, 1 min under hackathon cap
 _TIER_STRIDE: int = 1009  # prime to keep seeds across tiers far apart
 
 
@@ -45,9 +48,14 @@ class Curriculum:
         self,
         tasks: tuple[TaskSpec, ...] = ALL_TASKS,
         master_seed: int = 0,
+        time_limit_seconds: float | None = DEFAULT_TIME_LIMIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.tasks = tasks
         self.master_seed = master_seed
+        self.time_limit_seconds = time_limit_seconds
+        self._clock = clock
+        self._start_time: float | None = None
         self.state = CurriculumState()
 
     # ------------------------------------------------------------------
@@ -71,7 +79,22 @@ class Curriculum:
 
     def next_variation(self) -> tuple[TaskSpec, int, int]:
         """Return (TaskSpec, seed, attempt) for the variation about to run."""
+        self._ensure_started()
         return self.current_spec(), self.current_seed(), self.state.attempt_in_tier
+
+    def elapsed_seconds(self) -> float:
+        if self._start_time is None:
+            return 0.0
+        return self._clock() - self._start_time
+
+    def _ensure_started(self) -> None:
+        if self._start_time is None:
+            self._start_time = self._clock()
+
+    def _time_budget_exhausted(self) -> bool:
+        if self.time_limit_seconds is None or self._start_time is None:
+            return False
+        return (self._clock() - self._start_time) >= self.time_limit_seconds
 
     # ------------------------------------------------------------------
     # State transitions
@@ -81,6 +104,7 @@ class Curriculum:
         if self.state.done:
             raise RuntimeError("curriculum already done; call reset()")
 
+        self._ensure_started()
         spec = self.current_spec()
         self.state.history.append(
             AttemptRecord(
@@ -90,6 +114,11 @@ class Curriculum:
                 score=score,
             )
         )
+
+        if self._time_budget_exhausted():
+            self.state.mastered.setdefault(spec.tier, False)
+            self.state.done = True
+            return
 
         if score >= MASTERY_SCORE:
             self.state.streak += 1
@@ -110,6 +139,7 @@ class Curriculum:
 
     def reset(self) -> None:
         self.state = CurriculumState()
+        self._start_time = None
 
     # ------------------------------------------------------------------
     # Internal

@@ -13,6 +13,7 @@ from warehouse_routing.sim import StepResult
 TIME_PENALTY = -0.01
 INVALID_PENALTY = -0.05
 SKU_VISIT_BONUS = 0.1
+BUDGET_EXHAUST_PENALTY = -0.2
 
 
 def compute_reward(result: StepResult, optimal_length: int) -> Reward:
@@ -32,7 +33,7 @@ def compute_reward(result: StepResult, optimal_length: int) -> Reward:
         if success and obs.steps_taken > 0:
             terminal = optimal_length / obs.steps_taken
         else:
-            terminal = 0.0
+            terminal = BUDGET_EXHAUST_PENALTY
 
     return Reward(
         value=progress + penalty + terminal,

@@ -99,3 +99,27 @@ def test_summary_reports_full_history() -> None:
     assert summary["n_attempts"] == 2
     history = summary["history"]
     assert isinstance(history, list) and len(history) == 2
+
+
+def test_wall_clock_cap_terminates_early() -> None:
+    fake_time = [0.0]
+
+    def clock() -> float:
+        return fake_time[0]
+
+    c = Curriculum(time_limit_seconds=100.0, clock=clock)
+    c.next_variation()  # starts the clock at 0
+    fake_time[0] = 50.0
+    c.record_score(1.0)  # still under the cap
+    assert not c.is_done()
+    fake_time[0] = 150.0  # past the cap
+    c.record_score(1.0)
+    assert c.is_done()
+    assert c.state.mastered.get("easy") is False
+
+
+def test_no_time_limit_never_auto_terminates() -> None:
+    c = Curriculum(time_limit_seconds=None)
+    for _ in range(MAX_ATTEMPTS - 1):
+        c.record_score(0.1)
+    assert not c.is_done()
