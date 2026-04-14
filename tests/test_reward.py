@@ -1,4 +1,6 @@
 # agent-notes: { ctx: "reward shaping: progress/penalty/terminal components", deps: [src/warehouse_routing/reward.py, src/warehouse_routing/sim.py], state: active, last: "sato@2026-04-14" }
+import pytest
+
 from warehouse_routing.models import Cell, Observation
 from warehouse_routing.reward import (
     INVALID_PENALTY,
@@ -91,4 +93,4 @@ def test_reward_is_bounded_scalar() -> None:
         optimal_length=4,
     )
     # progress + penalty + 0 terminal
-    assert r.value == SKU_VISIT_BONUS + TIME_PENALTY + INVALID_PENALTY
+    assert r.value == pytest.approx(SKU_VISIT_BONUS + TIME_PENALTY + INVALID_PENALTY)
