@@ -2,7 +2,12 @@
 import time
 
 from warehouse_routing.models import Cell
-from warehouse_routing.solver import manhattan, optimal_tour_length
+from warehouse_routing.solver import (
+    manhattan,
+    obstacle_aware_distance,
+    optimal_tour_length,
+    optimal_tour_order,
+)
 
 
 def test_no_skus_zero_distance() -> None:
@@ -45,3 +50,46 @@ def test_handles_12_nodes_fast() -> None:
 def test_manhattan_symmetric() -> None:
     a, b = Cell(row=1, col=2), Cell(row=5, col=4)
     assert manhattan(a, b) == manhattan(b, a) == 6
+
+
+def test_optimal_tour_order_no_skus() -> None:
+    w = Cell(row=0, col=0)
+    assert optimal_tour_order(w, []) == [w, w]
+
+
+def test_optimal_tour_order_single_sku_closes_at_warehouse() -> None:
+    w = Cell(row=0, col=0)
+    sku = Cell(row=0, col=3)
+    order = optimal_tour_order(w, [sku])
+    assert order[0] == w
+    assert order[-1] == w
+    assert sku in order
+
+
+def test_optimal_tour_order_visits_every_sku_exactly_once() -> None:
+    w = Cell(row=0, col=0)
+    skus = [Cell(row=0, col=2), Cell(row=2, col=0), Cell(row=2, col=2)]
+    order = optimal_tour_order(w, skus)
+    assert order[0] == w and order[-1] == w
+    interior = order[1:-1]
+    assert set(interior) == set(skus)
+    assert len(interior) == len(skus)
+
+
+def test_optimal_tour_order_length_matches_optimal_tour_length() -> None:
+    w = Cell(row=0, col=0)
+    skus = [Cell(row=0, col=2), Cell(row=2, col=0)]
+    order = optimal_tour_order(w, skus)
+    hops = sum(manhattan(a, b) for a, b in zip(order[:-1], order[1:], strict=True))
+    assert hops == optimal_tour_length(w, skus)
+
+
+def test_optimal_tour_order_respects_obstacle_distance() -> None:
+    w = Cell(row=0, col=0)
+    skus = [Cell(row=0, col=2)]
+    obstacles = [Cell(row=0, col=1)]
+    dist_fn = obstacle_aware_distance(4, 4, obstacles)
+    order = optimal_tour_order(w, skus, distance_fn=dist_fn)
+    assert order == [w, skus[0], w]
+    hops = sum(dist_fn(a, b) for a, b in zip(order[:-1], order[1:], strict=True))
+    assert hops == optimal_tour_length(w, skus, distance_fn=dist_fn)
