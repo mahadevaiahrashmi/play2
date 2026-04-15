@@ -18,11 +18,12 @@
 - **Tech debt register activated** at `docs/tech-debt.md` with 11 items (D1–D11), 2 already resolved.
 - **Board ops**: Added #28/#29/#30 to project #4, moved them to **Ready**.
 - **Tests**: 89 passing (was 85 — added 1 `/ui` smoke + 3 history tests).
-- **Pushed**: all commits up to `ba02068` are on `origin/main`.
+- **Code review of `b750bde`**: 3 Important + 6 Suggestion findings, 0 Critical. Ship-clean. Findings deferred to next `inference.py` touch. Full review at `docs/code-reviews/2026-04-15-prompt-history-and-ui-smoke.md`, tracked at `docs/tracking/2026-04-15-prompt-history-ui-smoke-review.md`.
+- **Pushed**: all commits up to `af7dc23` are on `origin/main`.
 
 ## Current State
 - **Branch:** `main`
-- **Last commit:** `ba02068 docs(tech-debt): activate register with D1-D11 from sprint 1-4 retros`
+- **Last commit:** `af7dc23 docs(review): code review of b750bde — prompt history + /ui smoke test`
 - **Uncommitted changes:** none — working tree clean
 - **Tests:** 89 passing across 14 test files
 - **Board status:** Sprint 2 has 3 items in **Ready** (#28, #29, #30). Sprints 1/3/4 are closed. No items In Progress.
@@ -48,10 +49,11 @@
    - **#30** (`LLM policy classes need mocked-client prompt assertion test`): Add a Done Gate item requiring any LLM-wrapping policy class to ship with a mocked-client test asserting message contents. Update `docs/process/done-gate.md` and the AI Engineer role guide.
    - All three are doc/process work, not code. Should fit one short session. Close each via `gh issue close`.
 6. **Then add CI** (`.github/workflows/test.yml`) — addresses D7. One workflow: install uv, `uv sync`, `pytest`. Trigger on push + PR. Block merges on red. ~30 min.
-7. **Then a real engineering sprint** — likely **beating the Llama 0.000 baseline**: re-run inference now that #26 added prompt history, see if it moves, write up findings. Use `--max-variations 5` to limit cost.
+7. **Then a real engineering sprint** — likely **beating the Llama 0.000 baseline**: re-run inference now that #26 added prompt history, see if it moves, write up findings. Use `--max-variations 5` to limit cost. **When you touch `inference.py`, fold in the deferred review findings** from `docs/code-reviews/2026-04-15-prompt-history-and-ui-smoke.md` (V1: typed history rows; V2: `Policy` protocol with optional `record()`; T1: assert SYSTEM_PROMPT in test).
 
 ## Tracking Artifacts
-- `docs/tracking/` is empty (active artifacts). Sprint 1 and 3 artifacts archived under `docs/tracking/archive/sprint-1/`. No active phase context to carry forward.
+- `docs/tracking/2026-04-15-prompt-history-ui-smoke-review.md` — code review tracking for `b750bde`. Status: Complete. All findings deferred to next `inference.py` touch.
+- Sprint 1 and 3 implementation artifacts archived under `docs/tracking/archive/sprint-1/`.
 - `docs/product-context.md` exists (created in a prior session).
 
 ## Proxy Decisions (Review Required)
