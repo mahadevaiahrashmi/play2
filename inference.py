@@ -51,9 +51,9 @@ from warehouse_routing.reward import compute_reward
 from warehouse_routing.sim import GridEnv, StepResult
 from warehouse_routing.tasks import TaskSpec, make_variation
 
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://api.groq.com/openai/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.3-70b-versatile"
+API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 BENCHMARK = "warehouse_routing"
 
@@ -97,18 +97,43 @@ def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> No
 # ---------------------------------------------------------------------------
 
 
+HISTORY_WINDOW = 8
+
+
 @dataclass
 class OpenAIPolicy:
     client: object  # openai.OpenAI, left untyped to avoid hard import at module scope
     model: str
+    history: list[dict] = None  # type: ignore[assignment]
+    last_steps_taken: int = -1
+
+    def __post_init__(self) -> None:
+        self.history = []
+
+    def reset(self) -> None:
+        self.history = []
+        self.last_steps_taken = -1
 
     def choose(self, obs: Observation) -> Move:
+        # New episode detection: step counter went backward (or first call).
+        if obs.steps_taken <= self.last_steps_taken:
+            self.history = []
+        self.last_steps_taken = obs.steps_taken
+
+        recent = self.history[-HISTORY_WINDOW:]
+        history_str = (
+            "; ".join(f"{h['action']}->r={h['reward']:.2f}" for h in recent) if recent else "none"
+        )
+        user_content = (
+            f"recent_moves: {history_str}\n"
+            f"state: {obs.model_dump_json()}"
+        )
         try:
             completion = self.client.chat.completions.create(  # type: ignore[attr-defined]
                 model=self.model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": obs.model_dump_json()},
+                    {"role": "user", "content": user_content},
                 ],
                 max_tokens=4,
                 temperature=0.0,
@@ -119,6 +144,9 @@ class OpenAIPolicy:
             return "N"
         m = re.search(r"[NSEW]", text)
         return m.group(0) if m else "N"  # type: ignore[return-value]
+
+    def record(self, action: Move, reward: float) -> None:
+        self.history.append({"action": action, "reward": reward})
 
 
 def build_policy(dry_run: bool) -> Policy:
@@ -163,6 +191,8 @@ def run_variation(spec: TaskSpec, seed: int, attempt: int, policy: Policy, model
             result = env.step(Action(move=move))
             reward = compute_reward(result, variation.optimal_length)
             rewards.append(reward.value)
+            if hasattr(policy, "record"):
+                policy.record(move, reward.value)  # type: ignore[attr-defined]
             steps_taken = result.observation.steps_taken
             log_step(
                 step=steps_taken,
