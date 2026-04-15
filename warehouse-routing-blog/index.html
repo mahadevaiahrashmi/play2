@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Warehouse Routing OpenEnv — Blog</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --card: #1a1a2e; --text: #e0e0e0; --muted: #8b949e; --accent: #58a6ff; --border: #30363d; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; max-width: 820px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 2em; margin: 0 0 32px; color: #fff; line-height: 1.2; }
+  h2 { font-size: 1.5em; margin: 48px 0 16px; color: #fff; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 1.15em; margin: 32px 0 12px; color: #fff; }
+  p { margin: 0 0 16px; }
+  em { color: var(--muted); }
+  strong { color: #fff; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+  ul, ol { margin: 0 0 16px 24px; }
+  li { margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th { text-align: left; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); color: #fff; font-size: 0.9em; }
+  td { padding: 10px 12px; border: 1px solid var(--border); font-size: 0.9em; }
+  tr.row-oracle { background: rgba(76, 175, 80, 0.1); }
+  tr.row-oracle td { color: #fff; font-weight: 600; }
+  tr.row-oracle td:nth-child(2) { color: #81c784; }
+  tr.row-llm td:nth-child(2) { color: #e57373; }
+  tr.row-random td:nth-child(2) { color: #e57373; }
+
+  .code-block { position: relative; margin: 16px 0; }
+  .code-block pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'SF Mono', 'Fira Code', monospace; color: #c9d1d9; margin: 0; }
+  .reward-comment { color: #81c784; }
+
+  .cards { display: flex; gap: 16px; margin: 24px 0; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 240px; background: var(--card); border-radius: 12px; padding: 24px 20px; display: flex; flex-direction: column; }
+  .card-header { text-align: center; margin-bottom: 14px; }
+  .card-header .emoji { font-size: 32px; display: block; margin-bottom: 6px; }
+  .card-header .title { font-weight: bold; font-size: 1.05em; }
+  .card-question { color: var(--muted); font-size: 13px; margin-bottom: 14px; text-align: center; height: 36px; display: flex; align-items: center; justify-content: center; }
+  .card-code { background: var(--bg); border: none; border-radius: 8px; padding: 10px 12px; font-size: 10.5px; margin: 0; line-height: 1.45; font-family: 'SF Mono', 'Fira Code', monospace; color: #c9d1d9; overflow-x: auto; height: 150px; white-space: pre; }
+  .card-outcome { margin-top: 12px; font-size: 13px; font-weight: 600; height: 24px; display: flex; align-items: center; }
+  .card-insight { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; border-top: 1px solid var(--border); padding-top: 8px; height: 56px; }
+
+  .green { color: #4caf50; }
+  .red { color: #ef5350; }
+  .blue { color: #4fc3f7; }
+  .orange { color: #ffb74d; }
+  .neg { color: #e57373; opacity: 0.85; }
+  .pos { color: #81c784; opacity: 0.85; }
+
+  .cold-open { display: flex; gap: 16px; margin: 24px 0; flex-wrap: wrap; }
+  .cold-open-panel { flex: 1; min-width: 340px; background: var(--surface); border-radius: 12px; padding: 20px; border: 1px solid var(--border); }
+  .cold-open-panel h3 { margin: 0 0 4px; font-size: 1em; border: none; padding: 0; color: #fff; }
+  .cold-open-panel .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .cold-open-panel pre { margin: 0; padding: 12px; font-size: 10.5px; border: none; background: var(--bg); border-radius: 8px; height: 220px; overflow-y: auto; }
+  .cold-open-panel .verdict { margin-top: 12px; font-size: 13px; }
+  .cold-open-panel .verdict .red { color: #e57373; }
+  .cold-open-panel .verdict .green { color: #81c784; }
+</style>
+</head>
+<body>
+
+<h1>Warehouse Routing OpenEnv: Why a 70B Llama Plays a Pick-and-Pack Tour Like a Random Walk</h1>
+
+<p><em>An OpenEnv-compatible gridworld for multi-stop AMR routing, an honest baseline, and a diagnosis of why prompting alone isn't enough.</em></p>
+
+<h2>Oracle vs Frontier Llama, Cold</h2>
+
+<div class="cold-open">
+
+<div class="cold-open-panel">
+<h3>Oracle (Held-Karp + A*)</h3>
+<div class="subtitle"><em>Easy tier · 8×8 grid · 3 SKUs · 64-step budget</em></div>
+<pre><span class="pos">(+)</span> Compute optimal tour over SKUs (Held-Karp)
+<span class="pos">(+)</span> Route between stops with A* (obstacle-aware)
+<span class="pos">(+)</span> Replay the move sequence: E S E S S S E E ...
+<span class="pos">(+)</span> Visit SKU 1 → SKU 2 → SKU 3 → return to warehouse
+<span class="pos">(+)</span> done · all SKUs visited · robot at base</pre>
+<div class="verdict"><span class="green">9 episodes · mean_score 1.000 · mastered easy + medium + hard</span></div>
+</div>
+
+<div class="cold-open-panel">
+<h3>Llama 3.3 70B (Groq, zero-shot)</h3>
+<div class="subtitle"><em>Same env. Same tier. Same step budget.</em></div>
+<pre><span class="neg">(-)</span> N  reward=-0.06 error=invalid_move   <span class="reward-comment">← already at row 0</span>
+<span class="neg">(-)</span> N  reward=-0.06 error=invalid_move
+<span class="neg">(-)</span> N  reward=-0.06 error=invalid_move
+<span class="neg">(-)</span> N  ×35 in a row, all invalid_move
+<span class="neg">(-)</span> ...
+<span class="neg">(-)</span> E W E W E W ...  <span class="reward-comment">← variation 3, 64 steps oscillating</span>
+<span class="neg">(-)</span> budget exhausted · 0 SKUs visited</pre>
+<div class="verdict"><span class="red">3 episodes · mean_score 0.000 · success_rate 0.00</span></div>
+</div>
+
+</div>
+
+<p>Both agents face the same task: visit every SKU on a small grid and return to the warehouse, in fewer steps than the optimal tour allows. The oracle solves it perfectly because it has a TSP solver and an A* path planner. Llama 3.3 70B, given the same observation as JSON each turn and asked for a single letter (N/S/E/W), bumps the north wall 35 times in a row in one episode and oscillates east-west for 64 straight steps in another. Both fail with score 0.000.</p>
+
+<p>This isn't a story about a small open model being weak. It's a story about <em>statelessness</em>. The model is asked to plan a multi-step route through a bare JSON snapshot of the world. It has no memory of which moves it just tried, no record of which walls it just hit, and no scratchpad to plan a tour. Frontier prompting, with a frontier model, scores zero.</p>
+
+<h2>The Gap</h2>
+
+<p>Classical TSP solvers — Held-Karp, Lin-Kernighan, Concorde — are decades-old and effectively perfect on small instances. If you hand a model the SKU coordinates, the obstacles, and the warehouse, you don't need a language model at all; you call <code>python_tsp</code> and you're done. That's exactly what our oracle does, which is why it scores 1.000.</p>
+
+<p>But the OpenEnv hackathon premise — and the more interesting research question — is different: <em>can a language model, exposed only to a grid observation each turn, learn to plan and execute a multi-stop route?</em> Not by being handed a TSP solver, but by reasoning over partial observations, action feedback, and accumulated reward.</p>
+
+<p>warehouse-routing-openenv is built to answer that question. The agent sees the grid, picks a single move, gets feedback, and iterates. No coordinates are pre-summarized. No "legal moves" hint is provided. The only escape from a wall is to remember you just hit it.</p>
+
+<h2>What a Warehouse Robot Actually Does</h2>
+
+<p>An autonomous mobile robot in a fulfillment center has a deceptively simple loop: pick up packing material at the warehouse, drive to each SKU pick location in some order, then return to the packing station. The hard part is the ordering — visiting <code>n</code> SKUs has <code>n!</code> possible tours, and the floor is full of static obstacles (shelves, conveyors, charging stations) that constrain which paths are even possible.</p>
+
+<p>warehouse-routing-openenv distills this to a 2D gridworld:</p>
+
+<ul>
+<li><strong>Warehouse</strong> — the packing station, where every episode begins and must end</li>
+<li><strong>SKUs</strong> — pick locations to visit (1 on easy, more on medium/hard)</li>
+<li><strong>Obstacles</strong> — blocked cells that force the agent to plan around them</li>
+<li><strong>Step budget</strong> — a hard cap; running out is a failure</li>
+</ul>
+
+<p>The agent picks one of four moves per turn:</p>
+
+<div class="code-block">
+<pre>Action(move=<span style="color:#a5d6ff">"N"</span>)  <span class="reward-comment"># north (row - 1)</span>
+Action(move=<span style="color:#a5d6ff">"S"</span>)  <span class="reward-comment"># south (row + 1)</span>
+Action(move=<span style="color:#a5d6ff">"E"</span>)  <span class="reward-comment"># east  (col + 1)</span>
+Action(move=<span style="color:#a5d6ff">"W"</span>)  <span class="reward-comment"># west  (col - 1)</span></pre>
+</div>
+
+<p>That's the entire action space. No tools, no SQL, no JOINs — just spatial reasoning under partial information.</p>
+
+<h2>Built on OpenEnv</h2>
+
+<p><a href="https://github.com/meta-pytorch/OpenEnv">OpenEnv</a> provides a Gymnasium-style HTTP contract for agentic RL environments. The interface is small and well-defined:</p>
+
+<ul>
+<li><code>POST /reset</code> — start a new episode, return the initial observation</li>
+<li><code>POST /step</code> — execute one action, return observation + reward + done flag</li>
+<li><code>GET /state</code> — session metadata (episode id, step count)</li>
+</ul>
+
+<p>warehouse-routing wraps a Pydantic-typed environment in a FastAPI shim, ships as a Docker image, and runs on Hugging Face Spaces. Pydantic enforces typed contracts at every boundary so a malformed action returns 422, never silent corruption:</p>
+
+<div class="code-block">
+<pre>env = WarehouseRoutingEnvironment()
+obs = env.<span style="color:#d2a8ff">reset</span>()
+<span class="reward-comment"># obs.tier="easy"  obs.sku_locations=[(3,2),(7,7),(4,4)]  obs.robot_pos=(0,0)</span>
+
+obs = env.<span style="color:#d2a8ff">step</span>(Action(move=<span style="color:#a5d6ff">"E"</span>))
+<span class="reward-comment"># obs.robot_pos=(0,1)  reward=-0.01  done=false</span></pre>
+</div>
+
+<p>On top of this, we mount a self-contained SVG grid viewer at <code>/ui</code>: vanilla JS, no Gradio, no extra deps. It polls <code>/state</code>, calls <code>/reset</code> and <code>/step</code> via fetch, and renders the warehouse, SKUs (visited and not), obstacles, robot, and a breadcrumb trail. You can drive an episode with the on-screen d-pad or your arrow keys.</p>
+
+<h2>Reward Architecture</h2>
+
+<p>Three components combine on every step. The constants live in <code>reward.py</code> and are deliberately small so the shaping doesn't dominate the terminal score:</p>
+
+<table>
+<tr><th>Component</th><th>Signal</th><th>Value</th></tr>
+<tr>
+  <td><strong>Step cost</strong></td>
+  <td>Charged on every move (valid or not)</td>
+  <td><span class="neg">−0.01</span></td>
+</tr>
+<tr>
+  <td><strong>Invalid penalty</strong></td>
+  <td>Added when the move is blocked (wall, obstacle, off-grid)</td>
+  <td><span class="neg">−0.05</span></td>
+</tr>
+<tr>
+  <td><strong>SKU visit bonus</strong></td>
+  <td>Granted the first time the agent reaches a SKU cell</td>
+  <td><span class="pos">+0.10</span></td>
+</tr>
+<tr>
+  <td><strong>Terminal (success)</strong></td>
+  <td>Held-Karp optimal length divided by agent's step count</td>
+  <td><span class="pos">optimal / steps</span></td>
+</tr>
+<tr>
+  <td><strong>Terminal (failure)</strong></td>
+  <td>Budget exhausted without visiting all SKUs and returning</td>
+  <td><span class="neg">−0.20</span></td>
+</tr>
+</table>
+
+<p>The terminal bonus is the load-bearing piece. Because it scales as <code>optimal_length / agent_steps</code>, an agent that takes the optimal tour scores exactly 1.0; an agent that takes twice as many steps scores 0.5; an agent that fails scores below zero. This is the same ratio the grader uses for the final episode score, so the RL signal and the leaderboard metric are aligned by construction.</p>
+
+<p>The shaped pieces (step cost, invalid penalty, SKU bonus) provide dense feedback during the episode without overwhelming the terminal. Crucially, the invalid penalty is small enough (−0.05) that a model wall-bumping for 35 turns isn't catastrophic in raw reward — but it's catastrophic in <em>opportunity cost</em>, because every wasted step is a step closer to budget exhaustion.</p>
+
+<h2>Curriculum: Easy → Medium → Hard</h2>
+
+<p>warehouse-routing ships with a deterministic curriculum runner. The agent starts on Easy (small grid, few SKUs, no obstacles) and must master a tier — three successful variations in a row — before the runner promotes it to Medium and then Hard. Within a tier, every variation is generated from a deterministic seed so runs are reproducible.</p>
+
+<p>Critically, <strong>tier transitions happen between episodes, not within</strong>. One episode is bound to one tier. The agent doesn't escalate mid-tour; it has to demonstrate mastery before the runner makes the world harder. The curriculum is a real curriculum, not a difficulty knob.</p>
+
+<h2>Baselines</h2>
+
+<p>Three policies frame the learning space:</p>
+
+<table>
+<tr><th>Policy</th><th>mean_score</th><th>success_rate</th><th>n</th><th>Notes</th></tr>
+<tr class="row-oracle"><td>Oracle (Held-Karp + A*)</td><td>1.000</td><td>1.00</td><td>9</td><td>Mastered easy + medium + hard</td></tr>
+<tr class="row-llm"><td>Llama 3.3 70B (Groq, zero-shot)</td><td>0.000</td><td>0.00</td><td>3</td><td>Easy only — never advanced</td></tr>
+<tr class="row-random"><td>Random (uniform N/S/E/W)</td><td>0.000</td><td>0.00</td><td>9</td><td>Curriculum never promotes past easy</td></tr>
+</table>
+
+<p>The result that should jump out: a 70B frontier instruction-tuned model and a uniform random policy score the same. That's a strong claim and it deserves an explanation, which is the next section.</p>
+
+<h2>What the Llama Baseline Did Wrong</h2>
+
+<p>We ran <code>inference.py</code> against Groq's <code>llama-3.3-70b-versatile</code> with the default prompt: a system message describing the task and the current observation as JSON. Three failure modes accounted for the 0.000 score.</p>
+
+<div class="cards">
+
+<div class="card">
+<div class="card-header">
+  <span class="emoji">🧱</span>
+  <span class="title red">Wall Bumping</span>
+</div>
+<div class="card-question"><em>"Visit all SKUs and return to base"</em></div>
+<div class="card-code">step 9:  N  invalid_move
+step 10: N  invalid_move
+step 11: N  invalid_move
+... 35 N's in a row ...
+step 43: N  invalid_move
+step 44: S  -0.01  ← finally not N</div>
+<div class="card-outcome"><span class="red">35 wasted steps · budget burned · 0 SKUs</span></div>
+<div class="card-insight">Robot was at row 0. Model kept choosing N for 35 turns despite getting <code>invalid_move</code> back every time.</div>
+</div>
+
+<div class="card">
+<div class="card-header">
+  <span class="emoji">🔁</span>
+  <span class="title orange">Oscillation</span>
+</div>
+<div class="card-question"><em>"Visit all SKUs and return to base"</em></div>
+<div class="card-code">step 1: E
+step 2: W
+step 3: E
+step 4: W
+... 60 more E↔W swaps ...
+step 64: E  done · score 0.000</div>
+<div class="card-outcome"><span class="red">64 steps · 0 spatial progress</span></div>
+<div class="card-insight">Pure E↔W ping-pong for 64 straight steps. Model has no memory that it just made the inverse move last turn.</div>
+</div>
+
+<div class="card">
+<div class="card-header">
+  <span class="emoji">🪞</span>
+  <span class="title blue">No Memory</span>
+</div>
+<div class="card-question"><em>Why both above happen</em></div>
+<div class="card-code">user: { "robot_pos": {"row":0,"col":0},
+         "sku_locations": [...],
+         "obstacles": [],
+         "visited": [false,false,false],
+         "tier": "easy" }
+assistant: N
+(next turn, identical context)
+user: { "robot_pos": {"row":0,"col":0}, ...
+assistant: N</div>
+<div class="card-outcome"><span class="red">stateless prompt → repeating choice</span></div>
+<div class="card-insight">Each turn is independent. No move history, no last reward, no error trace. The model isn't "wrong" — it can't learn from feedback it never sees.</div>
+</div>
+
+</div>
+
+<p>The third card is the diagnosis. The first two are symptoms. Our default <code>OpenAIPolicy.choose</code> sends only the current observation, asks for a single letter, and gets one. The model has no scratchpad and no view of its own past moves. Even Llama 3.3 70B, which has no trouble doing this kind of reasoning when shown context, can't recover from feedback it isn't shown.</p>
+
+<h2>The Learning Space</h2>
+
+<p>The interesting region is between the two zero-scoring baselines and the perfect oracle:</p>
+
+<table>
+<tr><th>Policy</th><th>Reward source</th><th>Score</th></tr>
+<tr class="row-random"><td>Random</td><td>Uniform N/S/E/W, no model</td><td>0.000</td></tr>
+<tr class="row-llm"><td>Llama 3.3 70B (zero-shot, no history)</td><td>Stateless prompt</td><td>0.000</td></tr>
+<tr><td>?</td><td>Llama + move history + error feedback</td><td><em>open question</em></td></tr>
+<tr><td>?</td><td>Llama + history + chain-of-thought</td><td><em>open question</em></td></tr>
+<tr><td>?</td><td>Small open model + GRPO on this env</td><td><em>open question</em></td></tr>
+<tr class="row-oracle"><td>Oracle</td><td>Held-Karp + A*</td><td>1.000</td></tr>
+</table>
+
+<p>The point of the environment isn't to crown a winner. It's to surface what's missing in a direct prompt-the-model setup, and to give a reproducible substrate for testing fixes. The three open questions above are the obvious next experiments.</p>
+
+<h2>Next Steps</h2>
+
+<p><strong>Prompt history.</strong> The smallest, cheapest fix: include the last <em>k</em> moves, the last reward, and any error string in the user message. Both wall-bumping and oscillation are <em>caused</em> by the model not seeing this; both should disappear when it does. Tracked as <a href="https://github.com/mahadevaiahrashmi/play2/issues/26">issue #26</a>. Expected: easy-tier mean_score ≥ 0.30 from history alone, no other changes.</p>
+
+<p><strong>Chain-of-thought before action.</strong> Raise <code>max_tokens</code> from 4 to ~200 and let the model reason about which direction makes spatial sense before emitting the letter. Larger models often plan a multi-step route in the scratchpad and then execute it. This is layered on top of history, not instead of it.</p>
+
+<p><strong>Train a small open model with GRPO.</strong> The reward function is already shaped for RL: dense step-level signal, terminal aligned with the leaderboard score, deterministic curriculum. The natural next experiment is to take a 0.5–1.5B model, SFT-warm-start it on a few oracle trajectories, then run GRPO over the curriculum. We have not done this yet — that would be a follow-up post with real numbers, not a hand-wave.</p>
+
+<p><strong>Harder tiers and obstacles.</strong> Easy tier is intentionally trivial so failures of the sort above are obvious. Medium and Hard tiers add more SKUs and obstacle density, which is where the spatial-planning bottleneck becomes hard even with history. The curriculum is set up to gate progression on real mastery rather than just episode count, so unstable policies can't sneak past Easy.</p>
+
+<h2>Try It Yourself</h2>
+
+<p>The environment runs on Hugging Face Spaces as a Docker image. The default <code>/web</code> route was the openenv-stock Gradio interface; we re-pointed the App tab to <code>/ui</code>, our SVG grid viewer, so the landing page shows the world directly:</p>
+
+<ul>
+<li><strong>Live environment</strong>: <a href="https://huggingface.co/spaces/Rashmi-mahadevaiah/drone">huggingface.co/spaces/Rashmi-mahadevaiah/drone</a> — drive an episode in your browser</li>
+<li><strong>Direct grid viewer</strong>: <a href="https://rashmi-mahadevaiah-drone.hf.space/ui">rashmi-mahadevaiah-drone.hf.space/ui</a> — the SVG UI without the HF wrapper</li>
+<li><strong>Inference baseline</strong>: <code>python inference.py --max-variations 3</code> with <code>GROQ_API_KEY</code> set reproduces the 0.000 result</li>
+<li><strong>Source</strong>: <a href="https://github.com/mahadevaiahrashmi/play2">github.com/mahadevaiahrashmi/play2</a> — full source, ADRs, and tracking artifacts</li>
+</ul>
+
+<h2>Discussion</h2>
+
+<p><strong>Stateless prompts have a ceiling, and it's lower than people think.</strong> A 70B instruction-tuned model is more than capable of solving an 8×8 TSP with three stops <em>given the right context</em>. The same model, exposed only to a JSON snapshot per turn with no memory across turns, scores zero. The model's parameter count is not the constraint here; the I/O contract is. This generalizes beyond gridworlds: any agentic environment that re-issues the same observation when the agent fails to make progress will see this exact failure mode.</p>
+
+<p><strong>Honest baselines beat optimistic ones.</strong> It would have been easy to write this post around a "Llama solves the easy tier" headline by quietly adding a "you just bumped a wall" hint to the prompt. We didn't, because the interesting result is what the model does with the stock contract, not what it does with a workaround. The 0.000 baseline is the artifact future improvements will be measured against.</p>
+
+<p><strong>The environment is the contribution.</strong> warehouse-routing-openenv doesn't depend on which model or which RL algorithm you bring. The action space, reward function, and curriculum are designed to be measurable, reproducible, and small enough to iterate on. The oracle gives you a tight upper bound, the random policy gives you a tight lower bound, and the LLM baseline tells you the gap is real.</p>
+
+<p><em>Style and format gratefully adapted from <a href="https://huggingface.co/spaces/hjerpe/sqlenv-blog">hjerpe/sqlenv-blog</a>.</em></p>
+
+</body>
+</html>
