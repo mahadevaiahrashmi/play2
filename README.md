@@ -1,5 +1,3 @@
-# agent-notes: { ctx: "public README: motivation, spec, setup, baseline", deps: [inference.py, openenv.yaml, docs/baseline-scores.md], state: active, last: "sato@2026-04-14" }
-
 # warehouse-routing-openenv
 
 An [OpenEnv](https://github.com/meta-pytorch/OpenEnv)-compliant gridworld
