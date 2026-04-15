@@ -60,3 +60,6 @@ ehthumbs.db
 # yarn.lock
 # pnpm-lock.yaml
 # bun.lockb
+
+# Sibling deliverable: separate HF Space repo
+warehouse-routing-blog/

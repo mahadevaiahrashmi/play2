@@ -104,9 +104,13 @@ _PAGE = r"""<!doctype html>
       <div class="row"><span class="k">seed / attempt</span><span class="v" id="seed">—</span></div>
       <div class="row"><span class="k">steps / budget</span><span class="v" id="steps">—</span></div>
       <div class="row"><span class="k">visited</span><span class="v" id="visited">—</span></div>
+      <div class="row"><span class="k">last action</span><span class="v" id="last-action">—</span></div>
       <div class="row"><span class="k">last reward</span><span class="v" id="reward">—</span></div>
+      <div class="row"><span class="k">cumulative reward</span><span class="v" id="cum-reward">—</span></div>
       <div class="row"><span class="k">done</span><span class="v" id="done">—</span></div>
       <div class="row"><span class="k">score (on done)</span><span class="v" id="score">—</span></div>
+      <div class="row"><span class="k">episode id</span><span class="v" id="ep-id" style="font-size:10px">—</span></div>
+      <div class="row"><span class="k">server step#</span><span class="v" id="ep-step">—</span></div>
 
       <div class="btns">
         <button class="primary" id="b-reset">Reset</button>
@@ -142,8 +146,10 @@ _PAGE = r"""<!doctype html>
 <script>
 const svgEl = document.getElementById("grid");
 const statusEl = document.getElementById("status");
-let latest = null;
-let trail = [];      // list of {row,col} visited positions since last reset
+let latest = null;          // last /reset or /step response (shape: {observation, reward, done, metadata})
+let trail = [];             // robot positions since last reset
+let cumReward = 0;
+let lastAction = null;
 let autoPoll = true;
 let pollTimer = null;
 
@@ -196,8 +202,9 @@ function renderGrid(obs) {
   svgEl.innerHTML = parts.join("");
 }
 
-function renderPanel(data) {
-  const obs = data.observation || {};
+function renderPanel() {
+  if (!latest) return;
+  const obs = latest.observation || {};
   document.getElementById("tier").textContent = obs.tier ?? "—";
   document.getElementById("seed").textContent =
     (obs.variation_seed ?? "?") + " / " + (obs.attempt ?? "?");
@@ -206,27 +213,34 @@ function renderPanel(data) {
   const visited = (obs.visited || []);
   const hit = visited.filter(Boolean).length;
   document.getElementById("visited").textContent = hit + " / " + visited.length;
-  const reward = data.reward;
+  document.getElementById("last-action").textContent = lastAction ?? "—";
+  const reward = latest.reward;
   document.getElementById("reward").textContent =
     (reward === null || reward === undefined) ? "—" : Number(reward).toFixed(2);
-  const done = !!data.done;
+  document.getElementById("cum-reward").textContent = cumReward.toFixed(2);
+  const done = !!latest.done;
   const doneEl = document.getElementById("done");
   doneEl.textContent = done ? "true" : "false";
   doneEl.className = "v done-" + done;
-  const meta = data.metadata || {};
+  const meta = latest.metadata || {};
   const score = meta.score;
   document.getElementById("score").textContent =
     (score === null || score === undefined) ? "—" : Number(score).toFixed(3);
 }
 
 async function refresh() {
+  // /state returns {episode_id, step_count} only — NOT the observation.
+  // Use it for session metadata; observation comes from /reset and /step.
   try {
     const r = await fetch("/state");
     if (!r.ok) { setStatus("/state " + r.status, true); return; }
-    const data = await r.json();
-    latest = data;
-    renderPanel(data);
-    renderGrid(data.observation);
+    const s = await r.json();
+    document.getElementById("ep-id").textContent = (s.episode_id || "—").slice(0, 8);
+    document.getElementById("ep-step").textContent = s.step_count ?? "—";
+    if (latest) {
+      renderPanel();
+      renderGrid(latest.observation);
+    }
     setStatus("ok · " + new Date().toLocaleTimeString());
   } catch (e) {
     setStatus("fetch failed: " + e, true);
@@ -238,19 +252,23 @@ async function doReset() {
     setStatus("resetting…");
     const r = await fetch("/reset", {method: "POST", headers: {"content-type": "application/json"}, body: "{}"});
     if (!r.ok) { setStatus("/reset " + r.status, true); return; }
-    const data = await r.json();
-    latest = data;
+    latest = await r.json();
     trail = [];
-    if (data.observation && data.observation.robot_pos) {
-      trail.push({row: data.observation.robot_pos.row, col: data.observation.robot_pos.col});
+    cumReward = 0;
+    lastAction = null;
+    if (latest.observation && latest.observation.robot_pos) {
+      trail.push({row: latest.observation.robot_pos.row, col: latest.observation.robot_pos.col});
     }
-    renderPanel(data);
-    renderGrid(data.observation);
-    setStatus("reset ok · tier=" + (data.observation?.tier ?? "?"));
+    renderPanel();
+    renderGrid(latest.observation);
+    refresh();
+    setStatus("reset ok · tier=" + (latest.observation?.tier ?? "?"));
   } catch (e) { setStatus("reset failed: " + e, true); }
 }
 
 async function doStep(move) {
+  if (!latest) { await doReset(); }
+  if (latest && latest.done) { setStatus("episode done — reset first", true); return; }
   try {
     setStatus("step " + move + "…");
     const r = await fetch("/step", {
@@ -259,15 +277,17 @@ async function doStep(move) {
       body: JSON.stringify({action: {move: move}}),
     });
     if (!r.ok) { setStatus("/step " + r.status, true); return; }
-    const data = await r.json();
-    latest = data;
-    if (data.observation && data.observation.robot_pos) {
-      trail.push({row: data.observation.robot_pos.row, col: data.observation.robot_pos.col});
+    latest = await r.json();
+    lastAction = move;
+    if (typeof latest.reward === "number") cumReward += latest.reward;
+    if (latest.observation && latest.observation.robot_pos) {
+      trail.push({row: latest.observation.robot_pos.row, col: latest.observation.robot_pos.col});
     }
-    renderPanel(data);
-    renderGrid(data.observation);
-    setStatus("step " + move + " · reward=" + Number(data.reward ?? 0).toFixed(2) +
-              (data.done ? " · DONE" : ""));
+    renderPanel();
+    renderGrid(latest.observation);
+    refresh();
+    setStatus("step " + move + " · reward=" + Number(latest.reward ?? 0).toFixed(2) +
+              (latest.done ? " · DONE" : ""));
   } catch (e) { setStatus("step failed: " + e, true); }
 }
 
@@ -293,8 +313,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "r" || e.key === "R") doReset();
 });
 
-refresh();
-schedulePoll();
+// Auto-reset on first load so the grid appears immediately.
+doReset().then(schedulePoll);
 </script>
 </body>
 </html>

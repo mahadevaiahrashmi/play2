@@ -5,9 +5,23 @@
 
 <!-- TODO: Replace this section with your project's overview after scaffolding -->
 
-**Project Name:** [Your Project Name]
-**Description:** [Brief description of what this project does]
-**Tech Stack:** [Language, framework, key libraries — update after running a scaffold command]
+**Project Name:** warehouse-routing-openenv
+**Description:** OpenEnv-compliant gridworld environment where an LLM agent plans and executes multi-stop warehouse pick-and-pack routes for an autonomous mobile robot (AMR), graded against optimal TSP solutions. Built to the Meta PyTorch OpenEnv Hackathon Round 1 spec as a learning/portfolio build.
+**Tech Stack:** Python 3.12+, Pydantic v2, FastAPI (HTTP shim), python-tsp, OpenAI client, Docker, Hugging Face Spaces
+
+## GitHub Board
+
+- **Project:** `warehouse-routing-openenv` (#4, owner `mahadevaiahrashmi`)
+- **URL:** https://github.com/users/mahadevaiahrashmi/projects/4
+- **Project node ID:** `PVT_kwHOATydZs4BUkPa`
+- **Status field ID:** `PVTSSF_lAHOATydZs4BUkPazhBriBk`
+- **Status option IDs:**
+  - Backlog: `d127446d`
+  - Ready: `d8242007`
+  - In Progress: `45922dc9`
+  - In Review: `f972a347`
+  - Done: `1439c428`
+- **Sprint labels:** `sprint:1`, `sprint:2`, `sprint:3`
 
 **Codebase map:** `docs/code-map.md` — read this first to understand the package structure, public APIs, and data flow.
 
