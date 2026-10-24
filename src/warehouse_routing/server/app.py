@@ -7,12 +7,16 @@ Endpoints (provided by openenv-core's `create_app`):
     GET  /state   -> current episode state
     GET  /schema  -> action/observation JSON schema
     GET  /health  -> liveness
+
+Added by ``server.hardening`` (see its docstring): clean JSON errors, GET /healthz,
+GET /metrics, and isolated per-client episodes under /sessions.
 """
 
 from openenv.core.env_server.http_server import create_app
 
 from warehouse_routing.env import WarehouseRoutingEnvironment
 from warehouse_routing.models import Action, Observation
+from warehouse_routing.server.hardening import install_hardening
 from warehouse_routing.server.ui import mount_ui
 
 app = create_app(
@@ -24,6 +28,7 @@ app = create_app(
 )
 
 mount_ui(app)
+install_hardening(app)
 
 
 def main(host: str = "0.0.0.0", port: int = 8000) -> None:

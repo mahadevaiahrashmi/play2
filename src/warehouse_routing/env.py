@@ -15,6 +15,7 @@ from openenv.core.env_server.types import State
 
 from warehouse_routing.curriculum import Curriculum
 from warehouse_routing.grader import grade_variation
+from warehouse_routing.metrics import METRICS
 from warehouse_routing.models import Action, Observation
 from warehouse_routing.reward import compute_reward
 from warehouse_routing.sim import GridEnv
@@ -28,9 +29,14 @@ class _Session:
     variation: Variation | None = None
     last_score: float | None = None
     state: State = field(default_factory=lambda: State(episode_id=str(uuid4()), step_count=0))
+    active: bool = False  # an episode has started and not finished
 
 
 _SESSION: _Session = _Session()
+
+
+class NotResetError(RuntimeError):
+    """step() was called before reset(); the HTTP layer maps this to a 409."""
 
 
 def reset_session(master_seed: int = 0) -> None:
@@ -59,6 +65,10 @@ class WarehouseRoutingEnvironment(Environment):
         s.variation = make_variation(spec, seed=seed, attempt=attempt)
         s.grid = GridEnv(s.variation.observation)
         s.state = State(episode_id=str(uuid4()), step_count=0)
+        if s.active:
+            METRICS.episode_abandoned()
+        METRICS.episode_started()
+        s.active = True
 
         return s.variation.observation.model_copy(
             update={"reward": 0.0, "metadata": _meta(score=None)}
@@ -67,16 +77,19 @@ class WarehouseRoutingEnvironment(Environment):
     def step(self, action: Action) -> Observation:  # type: ignore[override]
         s = _SESSION
         if s.grid is None or s.variation is None:
-            raise RuntimeError("step() called before reset()")
+            raise NotResetError("step() called before reset()")
 
         result = s.grid.step(action)
         reward = compute_reward(result, s.variation.optimal_length)
         s.state.step_count += 1
+        METRICS.step()
 
         score: float | None = None
         if result.done:
             score = grade_variation(result.observation, s.variation.optimal_length)
             s.last_score = score
+            s.active = False
+            METRICS.episode_finished(score)
 
         return result.observation.model_copy(
             update={
