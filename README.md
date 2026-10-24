@@ -101,7 +101,7 @@ Dense shaped reward on every step:
 
 ## Setup
 
-Requires Python ≥ 3.12 and Docker.
+Requires Python ≥ 3.12 (Docker is only needed for the container build).
 
 ```bash
 git clone <this-repo>
@@ -109,13 +109,16 @@ cd warehouse-routing-openenv
 uv sync                       # or: pip install -e ".[dev]"
 
 # run the tests
-pytest                        # 73 tests
+uv run pytest                 # 91 tests, no API key needed
 
 # smoke-test the environment offline (random policy, no LLM)
-python inference.py --dry-run --max-variations 5
+uv run python inference.py --dry-run --max-variations 5
+
+# score the random / greedy / oracle baselines on every tier (no API key)
+uv run python scripts/evaluate_baselines.py
 
 # validate the OpenEnv spec
-openenv validate .
+uv run openenv validate .
 
 # build & run the container
 docker build -t warehouse-routing:dev .
@@ -127,6 +130,10 @@ curl -X POST http://localhost:8000/step  -H 'content-type: application/json' -d 
 ```
 
 ## Running the LLM agent
+
+Any OpenAI-compatible endpoint works. Defaults are Groq
+(`https://api.groq.com/openai/v1`, `llama-3.3-70b-versatile`); the key is read
+from `GROQ_API_KEY`, `HF_TOKEN` or `API_KEY`.
 
 ```bash
 export API_BASE_URL="https://router.huggingface.co/v1"
@@ -162,11 +169,23 @@ Checks:
 
 See [`docs/baseline-scores.md`](docs/baseline-scores.md).
 
-| Run | Policy        | n | mean_score |
-|-----|---------------|---|------------|
-| 1   | random-dryrun | 5 | 0.000      |
+Offline policies, 20 seeded variations per tier (seeds 0–19), produced by
+`uv run python scripts/evaluate_baselines.py`:
+
+| Policy                     | Easy  | Medium | Hard  | Overall mean | Success rate |
+|----------------------------|-------|--------|-------|--------------|--------------|
+| Random                     | 0.000 | 0.000  | 0.000 | 0.000        | 0.00         |
+| Greedy (nearest-neighbour) | 0.979 | 0.948  | 0.895 | 0.941        | 1.00         |
+| Oracle (exact TSP)         | 1.000 | 1.000  | 1.000 | 1.000        | 1.00         |
 
 LLM baseline pending API credentials.
+
+## Meta-ecosystem fit
+
+The environment is built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+(`openenv-core`), Meta PyTorch's framework for agent environments: it exposes the
+standard `reset` / `step` HTTP API and passes `openenv validate .`. Any
+OpenAI-compatible model can be plugged in via `inference.py`.
 
 ## Repository layout
 
@@ -176,6 +195,7 @@ LLM baseline pending API credentials.
 ├── openenv.yaml                 # OpenEnv spec
 ├── Dockerfile                   # multi-stage build on openenv-base
 ├── validate-submission.sh       # pre-submission gate
+├── scripts/evaluate_baselines.py # offline baseline score table
 ├── server/app.py                # repo-root FastAPI entrypoint (re-exports)
 ├── src/warehouse_routing/
 │   ├── models.py                # typed Observation / Action / Cell
@@ -185,10 +205,12 @@ LLM baseline pending API credentials.
 │   ├── pathing.py               # A* distance
 │   ├── reward.py                # dense shaped reward
 │   ├── grader.py                # 0..1 score
+│   ├── policies.py              # Random / Greedy / Oracle baseline policies
+│   ├── eval.py                  # evaluation harness (curriculum + per-tier)
 │   ├── curriculum.py            # adaptive Easy→Medium→Hard state machine
 │   ├── env.py                   # OpenEnv Environment adapter
 │   └── server/app.py            # real FastAPI app
-├── tests/                       # 73 tests
+├── tests/                       # 91 tests
 └── docs/                        # plans, ADRs, baseline scores
 ```
 
