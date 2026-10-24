@@ -45,8 +45,16 @@ from dataclasses import dataclass
 from warehouse_routing.curriculum import DEFAULT_TIME_LIMIT_SECONDS, Curriculum
 from warehouse_routing.eval import Policy
 from warehouse_routing.grader import grade_variation
+from warehouse_routing.llm_policy import (
+    HISTORY_WINDOW,  # noqa: F401  (re-exported; tests import it from here)
+    SYSTEM_PROMPT,
+    LLMPolicy,
+    build_llm_stack,
+    format_history,
+    openai_llm_fn,
+)
 from warehouse_routing.models import Action, Move, Observation
-from warehouse_routing.policies import VALID_MOVES, RandomPolicy
+from warehouse_routing.policies import RandomPolicy
 from warehouse_routing.reward import compute_reward
 from warehouse_routing.sim import GridEnv, StepResult
 from warehouse_routing.tasks import TaskSpec, make_variation
@@ -56,14 +64,6 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.3-70b-versatile"
 API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 BENCHMARK = "warehouse_routing"
-
-SYSTEM_PROMPT = (
-    "You control a warehouse autonomous mobile robot (AMR) on a grid. Your goal: "
-    "visit every SKU cell, then return to the packing station (warehouse), using "
-    "the fewest moves. Obstacles block movement; leaving the grid is invalid.\n"
-    "Each turn you receive the current state as JSON. Respond with EXACTLY ONE of "
-    "N, S, E, W (single uppercase letter). No explanation."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +97,6 @@ def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> No
 # ---------------------------------------------------------------------------
 
 
-HISTORY_WINDOW = 8
-
-
 @dataclass
 class OpenAIPolicy:
     client: object  # openai.OpenAI, left untyped to avoid hard import at module scope
@@ -120,12 +117,8 @@ class OpenAIPolicy:
             self.history = []
         self.last_steps_taken = obs.steps_taken
 
-        recent = self.history[-HISTORY_WINDOW:]
-        history_str = (
-            "; ".join(f"{h['action']}->r={h['reward']:.2f}" for h in recent) if recent else "none"
-        )
         user_content = (
-            f"recent_moves: {history_str}\n"
+            f"recent_moves: {format_history(self.history)}\n"
             f"state: {obs.model_dump_json()}"
         )
         try:
@@ -149,7 +142,7 @@ class OpenAIPolicy:
         self.history.append({"action": action, "reward": reward})
 
 
-def build_policy(dry_run: bool) -> Policy:
+def build_policy(dry_run: bool, resilient: bool = False) -> Policy:
     if dry_run:
         return RandomPolicy(rng=random.Random(0))
     try:
@@ -161,6 +154,13 @@ def build_policy(dry_run: bool) -> Policy:
         print("[ERROR] HF_TOKEN (or API_KEY) must be set, or pass --dry-run", file=sys.stderr)
         sys.exit(2)
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    if resilient:
+        from warehouse_routing.resilient_llm import CircuitBreaker
+
+        stack = build_llm_stack(
+            openai_llm_fn(client, MODEL_NAME), breaker=CircuitBreaker(), timeout_s=30.0
+        )
+        return LLMPolicy(stack)
     return OpenAIPolicy(client=client, model=MODEL_NAME)
 
 
@@ -222,9 +222,15 @@ def main() -> int:
         help="hard cap on total variations (default: curriculum termination)",
     )
     parser.add_argument("--master-seed", type=int, default=0)
+    parser.add_argument(
+        "--resilient",
+        action="store_true",
+        help="LLM path with strict parsing, retries, timeout and circuit breaker "
+        "(see src/warehouse_routing/llm_policy.py)",
+    )
     args = parser.parse_args()
 
-    policy = build_policy(args.dry_run)
+    policy = build_policy(args.dry_run, args.resilient)
     model_label = "random-dryrun" if args.dry_run else MODEL_NAME
 
     # Dry-run skips the wall-clock cap so the smoke test is deterministic;
