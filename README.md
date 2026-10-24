@@ -109,13 +109,16 @@ cd warehouse-routing-openenv
 uv sync                       # or: pip install -e ".[dev]"
 
 # run the tests
-uv run pytest                 # 91 tests, no API key needed
+uv run pytest                 # 198 tests, no API key needed
 
 # smoke-test the environment offline (random policy, no LLM)
 uv run python inference.py --dry-run --max-variations 5
 
 # score the random / greedy / oracle baselines on every tier (no API key)
 uv run python scripts/evaluate_baselines.py
+
+# full evaluation platform run: policies + simulated-LLM failure scenarios, leaderboards, replayable logs
+uv run python scripts/run_eval.py --seeds 10 --out-dir runs/latest
 
 # validate the OpenEnv spec
 uv run openenv validate .
@@ -187,6 +190,95 @@ The environment is built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
 standard `reset` / `step` HTTP API and passes `openenv validate .`. Any
 OpenAI-compatible model can be plugged in via `inference.py`.
 
+## Evaluation platform architecture
+
+Beyond the environment, the repo contains a small LLM-agent *evaluation platform*.
+Everything below is implemented and tested offline (`uv run pytest`, no API key);
+LLM behaviour is exercised with a **scripted mock LLM**, never a real model.
+
+```mermaid
+flowchart LR
+    P[policy<br/>LLMPolicy / Greedy / Oracle] --> SA[structured_action<br/>strict parse + retry-with-error]
+    SA --> RL[resilient_llm<br/>timeout, backoff, circuit breaker]
+    RL --> BG[budget<br/>reserve / settle]
+    BG --> LLM[(LLM fn<br/>OpenAI client or ScriptedLLM)]
+    P -- move --> ENV[GridEnv sim]
+    ENV --> RG[reward + grader]
+    RG --> TR[tracing<br/>spans, loop detector]
+    TR --> LOG[episode_log<br/>JSONL, replay, dead letters]
+    LOG --> LB[leaderboard<br/>md + json]
+    RUN[runner<br/>bounded concurrency,<br/>deterministic order] -. drives .-> P
+```
+
+| Module (`src/warehouse_routing/`) | What it does | Tests |
+|---|---|---|
+| `structured_action.py` | Strict reply -> `Move` parsing (letter or `{"move": ..}`), up to `max_retries` re-asks that include the previous error, `LLMOutputError` after `max_retries+1` attempts, explicit `fallback_move` (wall-bump penalty step) | `test_structured_action.py` (21) |
+| `resilient_llm.py` | Per-call timeout on a daemon thread (a hung call never blocks the caller), exponential backoff with injectable sleep/jitter, closed/open/half-open circuit breaker with injectable clock | `test_resilient_llm.py` (10) |
+| `budget.py` | Thread-safe reserve-then-settle ledger; token/cost/step ceilings per episode and per run; per-model usage report; integer micro-dollar accounting | `test_budget.py` (13, incl. 200-thread test) |
+| `tracing.py` | `Tracer` spans (finish order, parent names, errors), per-episode latency/cost/error accounting, repeated-state/prompt loop alerts at every multiple of a threshold, JSON report | `test_tracing.py` (13) |
+| `episode_log.py` | JSONL episode log, deterministic replay that re-verifies positions/rewards/score, idempotent run IDs, dead-letter log with replay | `test_episode_log.py` (8) |
+| `llm_policy.py`, `mock_llm.py` | `LLMPolicy` composing the above (shared prompt with `inference.py`), OpenAI client adapter, `ScriptedLLM`/`MockLLMPolicy` and seven failure scenarios | `test_llm_policy.py` (16) |
+| `runner.py`, `leaderboard.py` | policy x tier x seed runner (bounded threads, results ordered by job index), retries + dead letters, deterministic leaderboard (Markdown + JSON); CLI in `scripts/run_eval.py` | `test_runner.py` (15) |
+| `server/hardening.py`, `metrics.py` | Clean JSON errors, `GET /healthz`, `GET /metrics`, isolated per-client `/sessions` episodes | `test_server_hardening.py` (11) |
+
+Design notes (details in each module docstring):
+
+- **Timeouts** use a daemon thread + `Event.wait`, not `with ThreadPoolExecutor`
+  (whose exit waits for the hung call).
+- **Budget** is reserved *before* a call under one lock, so concurrent callers cannot
+  collectively overspend; failed/timed-out calls are charged their full reservation.
+- **Determinism**: the runner collects results by job index, per-episode state
+  (RNG, breaker, logical clock) is never shared, and the leaderboard has no
+  timestamps; `scripts/run_eval.py --workers 1` and `--workers 4` produced
+  byte-identical leaderboard and budget files in our runs.
+
+### Running the evaluation
+
+```bash
+uv run python scripts/run_eval.py --seeds 10 --workers 4 --out-dir runs/latest
+```
+
+Writes replayable `*-episodes.jsonl`, `*-dead-letters.jsonl`, `*-leaderboard.{md,json}`,
+`*-trace.json` and `*-budget.json`; re-running skips episodes already logged.
+Real numbers: [`docs/baseline-scores.md`](docs/baseline-scores.md).
+
+### Server endpoints added
+
+`GET /healthz`, `GET /metrics` (episodes started/completed/abandoned, active
+episodes, mean score, steps), and an isolated-episode API:
+`POST /sessions {"tier","seed"}`, `GET /sessions/{id}`,
+`POST /sessions/{id}/step {"action":{"move":"E"}}`, `DELETE /sessions/{id}`.
+Validation errors return `{"error": "validation_error", "detail": [...]}`;
+`/step` before `/reset` returns 409 instead of a 500.
+
+## What breaks in production / known limitations
+
+- **No real-model results.** The LLM scenarios use a scripted fake model. The only
+  real-LLM path (`python inference.py [--resilient]`) is untested against a live
+  API in this repo; "LLM baseline pending API credentials".
+- **Abandoned timeouts keep running.** Python cannot kill a thread; a timed-out call
+  continues in the background (and may still be billed). The ledger keeps its
+  reservation until it returns, so a call that never returns holds budget forever.
+- **Token counts are estimates** (~4 chars/token) for reservations and in the mock;
+  real providers differ. If a provider exceeds `max_tokens` the overshoot is
+  recorded (`overshoots`) but cannot be prevented. Mock prices are illustrative.
+- **Everything is in-memory / single process.** Sessions, metrics, breaker state and
+  the tracer are lost on restart and not shared across workers or machines. The
+  JSONL log is append-only on local disk with no cross-process locking.
+- **Original OpenEnv `/reset` + `/step` still share one process-wide episode**
+  (`SUPPORTS_CONCURRENT_SESSIONS = False`); use `/sessions` for isolation.
+  `/sessions` has no authentication or rate limiting.
+- **Tracer is capped** (50,000 spans by default); beyond that spans are counted but
+  not stored (the `simulated-llm` run dropped 6,516 spans; summaries stay exact).
+- **Simulated outage scenarios are small and synthetic**; the breaker uses a logical
+  clock in the simulation, so real-time half-open behaviour is covered by unit tests
+  only.
+- **Environment scope**: single robot, single warehouse, 4-connected grid, three fixed
+  tiers; the Greedy baseline already scores 0.94 mean, so the benchmark has little
+  headroom except on Hard. Docker build and the HF Space were not verified on this box.
+- **Strict parsing is stricter than `inference.py`'s default path**, which still
+  accepts any reply containing N/S/E/W; use `--resilient` for the strict path.
+
 ## Repository layout
 
 ```
@@ -207,10 +299,21 @@ OpenAI-compatible model can be plugged in via `inference.py`.
 │   ├── grader.py                # 0..1 score
 │   ├── policies.py              # Random / Greedy / Oracle baseline policies
 │   ├── eval.py                  # evaluation harness (curriculum + per-tier)
+│   ├── structured_action.py     # strict reply parsing + retry-with-error
+│   ├── resilient_llm.py         # timeout / backoff / circuit breaker
+│   ├── budget.py                # reserve/settle cost ledger
+│   ├── tracing.py               # spans, episode accounting, loop detector
+│   ├── episode_log.py           # JSONL log, replay, dead letters
+│   ├── llm_policy.py            # LLMPolicy + OpenAI adapter
+│   ├── mock_llm.py              # scripted fake LLM + scenarios
+│   ├── runner.py                # policy x tier x seed runner
+│   ├── leaderboard.py           # markdown/json leaderboard
+│   ├── metrics.py               # server counters
 │   ├── curriculum.py            # adaptive Easy→Medium→Hard state machine
 │   ├── env.py                   # OpenEnv Environment adapter
-│   └── server/app.py            # real FastAPI app
-├── tests/                       # 91 tests
+│   └── server/                  # app.py (FastAPI), hardening.py, ui.py
+├── scripts/run_eval.py          # full offline evaluation + leaderboards
+├── tests/                       # 198 tests
 └── docs/                        # plans, ADRs, baseline scores
 ```
 
