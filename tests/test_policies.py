@@ -38,3 +38,23 @@ def test_random_policy_is_bounded() -> None:
     assert report.n == 6
     for e in report.episodes:
         assert 0.0 <= e.score <= 1.0
+
+
+def test_greedy_solves_every_tier_and_is_near_optimal() -> None:
+    from warehouse_routing.eval import evaluate_tiers
+    from warehouse_routing.policies import GreedyPolicy
+
+    report = evaluate_tiers(GreedyPolicy, n_per_tier=3, base_seed=0)
+    assert report.n == 9
+    assert report.success_rate == 1.0
+    assert all(0.0 < e.score <= 1.0 for e in report.episodes)
+    assert report.mean_score > 0.8
+
+
+def test_evaluate_tiers_oracle_is_perfect_and_deterministic() -> None:
+    from warehouse_routing.eval import evaluate_tiers
+
+    a = evaluate_tiers(OraclePolicy, n_per_tier=2, base_seed=5)
+    b = evaluate_tiers(OraclePolicy, n_per_tier=2, base_seed=5)
+    assert a.n == 6 and a.mean_score == 1.0
+    assert [e.steps for e in a.episodes] == [e.steps for e in b.episodes]

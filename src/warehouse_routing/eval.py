@@ -13,6 +13,7 @@ numbers.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -20,7 +21,7 @@ from warehouse_routing.curriculum import Curriculum
 from warehouse_routing.grader import grade_variation
 from warehouse_routing.models import Action, Move, Observation
 from warehouse_routing.sim import GridEnv
-from warehouse_routing.tasks import make_variation
+from warehouse_routing.tasks import ALL_TASKS, make_variation
 
 
 class Policy(Protocol):
@@ -106,4 +107,39 @@ def evaluate(
         )
         curriculum.record_score(score)
 
+    return EvalReport(episodes=results)
+
+
+def evaluate_tiers(
+    policy_factory: Callable[[], Policy],
+    *,
+    n_per_tier: int = 20,
+    base_seed: int = 0,
+) -> EvalReport:
+    """Run a fresh policy on `n_per_tier` seeded variations of each tier.
+
+    Unlike `evaluate`, this does not use the curriculum, so a policy that
+    cannot pass Easy is still measured on Medium and Hard. Seeds are
+    `base_seed .. base_seed + n_per_tier - 1` for every tier (deterministic).
+    """
+    results: list[EpisodeResult] = []
+    for spec in ALL_TASKS:
+        for i in range(n_per_tier):
+            seed = base_seed + i
+            variation = make_variation(spec, seed=seed, attempt=1)
+            env = GridEnv(variation.observation)
+            policy = policy_factory()
+            while not env.observation.done:
+                env.step(Action(move=policy.choose(env.observation)))
+            final = env.observation
+            results.append(
+                EpisodeResult(
+                    tier=spec.tier,
+                    seed=seed,
+                    attempt=1,
+                    steps=final.steps_taken,
+                    score=grade_variation(final, variation.optimal_length),
+                    success=all(final.visited) and final.robot_pos == final.warehouse,
+                )
+            )
     return EvalReport(episodes=results)

@@ -2,12 +2,15 @@
 """Deterministic baseline policies.
 
 - `RandomPolicy` — uniform over N/S/E/W, useful as a lower bound.
+- `GreedyPolicy` — nearest-neighbour heuristic: always walk (A*-routed) to the
+  closest unvisited SKU, then return to the warehouse. No lookahead, so it is
+  suboptimal but a strong, fast, key-free baseline.
 - `OraclePolicy` — computes the optimal TSP tour on the first observation
   of each episode and replays the precomputed move sequence. Scores 1.0
   on every variation and doubles as a regression check: if the grader,
   solver, or sim drift apart, the oracle stops scoring 1.0.
 
-Both implement the same `choose(obs) -> Move` interface used by
+All implement the same `choose(obs) -> Move` interface used by
 `inference.py` and the eval harness.
 """
 
@@ -29,6 +32,29 @@ class RandomPolicy:
 
     def choose(self, obs: Observation) -> Move:
         return self.rng.choice(VALID_MOVES)
+
+
+@dataclass
+class GreedyPolicy:
+    """Nearest-neighbour: head for the closest unvisited SKU (by A* distance),
+    then home. Stateless; replans every step."""
+
+    def choose(self, obs: Observation) -> Move:
+        blocked = frozenset((c.row, c.col) for c in obs.obstacles)
+        targets = [
+            sku for sku, seen in zip(obs.sku_locations, obs.visited, strict=True) if not seen
+        ] or [obs.warehouse]
+
+        best_path: list[Cell] | None = None
+        for target in targets:
+            path = astar_path(obs.grid_rows, obs.grid_cols, blocked, obs.robot_pos, target)
+            if path is not None and len(path) >= 2 and (
+                best_path is None or len(path) < len(best_path)
+            ):
+                best_path = path
+        if best_path is None:
+            return "N"  # nothing reachable (should not happen on generated variations)
+        return _cells_to_move(best_path[0], best_path[1])
 
 
 @dataclass
