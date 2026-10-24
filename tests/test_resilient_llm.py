@@ -178,3 +178,20 @@ def test_breaker_opening_mid_retry_stops_retrying() -> None:
     with pytest.raises(CircuitOpenError):
         llm()
     assert n["c"] == 2
+
+
+def test_non_retryable_error_in_half_open_releases_the_probe() -> None:
+    clock = FakeClock()
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=5.0, clock=clock)
+    cb.record_failure()
+    clock.t = 5.0
+    assert cb.state == "half_open"
+
+    def bug() -> str:
+        raise ValueError("not a service failure")
+
+    llm = ResilientLLM(bug, timeout_s=None, breaker=cb, retry_on=(ConnectionError,))
+    with pytest.raises(ValueError):
+        llm()
+    # Without cancel() the breaker would stay half-open with a probe "in flight" forever.
+    assert cb.allow() is True
