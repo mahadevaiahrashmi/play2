@@ -60,3 +60,6 @@ ehthumbs.db
 # yarn.lock
 # pnpm-lock.yaml
 # bun.lockb
+
+# Local evaluation artifacts
+runs/
