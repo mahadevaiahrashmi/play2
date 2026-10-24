@@ -166,7 +166,7 @@ class ResilientLLM[T]:
         self._retry_on = retry_on
 
     def delay_for(self, retry_index: int) -> float:
-        base = min(self.max_delay, self.base_delay * (2**retry_index))
+        base = min(self.max_delay, self.base_delay * float(2**retry_index))
         return base * (1 + self.jitter * self._rand())
 
     def __call__(self, *args: Any, **kwargs: Any) -> T:
